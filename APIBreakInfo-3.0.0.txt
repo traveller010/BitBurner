@@ -1,0 +1,386 @@
+API BREAK INFO FOR 3.0.0
+
+You cannot use the deprecated VSCode extension to connect to the Steam app via API server now. You have to use Remote API to connect your external editors to Bitburner.
+For more information, please check the Remote API page in the Documentation tab. If you have a question, please ask us on #external-editors on Discord (https://discord.gg/TFc3hKD).
+
+
+
+ns.nFormat() was removed.
+Use ns.format.number, ns.format.ram, ns.format.percent, or JS built-in objects/functions (e.g., Intl.NumberFormat, Intl.PluralRules, Intl.Locale) instead.
+
+Usage of the following functions may have been affected:
+ns.nFormat
+
+Potentially affected files on server home (with line numbers):
+corp-marketer.js: (Line numbers: 16, 22)
+diamond-hands.js: (Line numbers: 49, 50, 59, 81, 95)
+gtfo.js: (Line number: 49)
+
+
+
+The formatting functions have been moved to their own interface, ns.format.
+Each function has been replaced with their corresponding interface variant.
+Additionally, the naming of ns.tFormat has been changed to ns.format.time.
+
+Usage of the following functions may have been affected:
+ns.formatNumber
+ns.formatRam
+ns.formatPercent
+ns.tFormat
+
+Potentially affected files on server home (with line numbers):
+se.js: (Line numbers: 34, 57, 165, 169, 170, 171, 183, 184)
+aps-lite.js: (Line numbers: 14, 26, 27)
+deploy-on-home.js: (Line numbers: 69, 73, 75)
+test-f.js: (Line number: 15)
+heart.js: (Line number: 3)
+max-money.js: (Line numbers: 17, 23)
+
+
+
+ns.corporation.setAutoJobAssignment() was removed.
+It has been automatically replaced with "ns.corporation.setJobAssignment()".
+
+Usage of the following functions may have been affected:
+ns.corporation.setAutoJobAssignment
+
+Potentially affected files on server home (with line numbers):
+corp-recruiter.js: (Line number: 76)
+
+
+
+With some APIs, when you passed values to their params, you could pass a value that was not an exact match. For example, with ns.singularity.commitCrime, you could pass "Rob Store", "rob store", "RobStore", "robstore", "robStore", etc. This is called "fuzzy matching". Now, you must pass an exact value (i.e., Rob Store). This change affects:
+- Bladeburner action and type: BladeburnerActionType, BladeburnerGeneralActionName, BladeburnerContractName, BladeburnerOperationName, BladeburnerBlackOpName, SpecialBladeburnerActionTypeForSleeve, BladeburnerActionTypeForSleeve.
+- Crime: CrimeType
+- Faction work: FactionWorkType
+- University class: UniversityClassType
+- Gym stat: GymType
+- Job field: JobField
+- Stock position: PositionType
+- Stock order: OrderType
+You can access these values via ns.enums and Bladeburner APIs.
+
+
+
+ns.nuke, ns.brutessh, ns.ftpcrack, ns.relaysmtp, ns.httpworm, and ns.sqlinject now do not throw an error when you do not have the required .exe file or enough opened ports.
+This should not be a problem with most scripts. However, if you were catching errors and branching on the result of success/failure, you will need to use the return value instead.
+
+Usage of the following functions may have been affected:
+ns.nuke
+ns.brutessh
+ns.ftpcrack
+ns.relaysmtp
+ns.httpworm
+ns.sqlinject
+
+Potentially affected files on server home (with line numbers):
+nuke-all.js: (Line numbers: 35, 39, 43, 47, 51, 56)
+auto-deploy.js: (Line numbers: 12, 13, 14, 15, 16)
+book-keeper.js: (Line numbers: 21, 22, 23, 24, 25)
+find-targets.js: (Line numbers: 91, 92, 93, 94, 95)
+gimme-more-money.js: (Line numbers: 43, 44, 45, 46, 47, 213)
+kill-network-scripts.js: (Line numbers: 13, 14, 15, 16, 17)
+launch-fleets.js: (Line numbers: 34, 35, 36, 37, 38)
+strategist.js: (Line numbers: 26, 27, 28, 29, 30)
+utils.js: (Line number: 85)
+
+
+
+ns.stock.getConstants().WSEAccountCost was removed.
+It has been automatically replaced with "ns.stock.getConstants().WseAccountCost".
+
+ns.stock.getConstants().TIXAPICost was removed.
+It has been automatically replaced with "ns.stock.getConstants().TixApiCost".
+
+ns.stock.hasWSEAccount() was removed.
+It has been automatically replaced with "ns.stock.hasWseAccount()".
+
+ns.stock.hasTIXAPIAccess() was removed.
+It has been automatically replaced with "ns.stock.hasTixApiAccess()".
+
+ns.stock.has4SDataTIXAPI() was removed.
+It has been automatically replaced with "ns.stock.has4SDataTixApi()".
+
+Usage of the following functions may have been affected:
+ns.stock.getConstants().WSEAccountCost
+ns.stock.getConstants().TIXAPICost
+ns.stock.hasWSEAccount
+ns.stock.hasTIXAPIAccess
+ns.stock.has4SDataTIXAPI
+
+Potentially affected files on server home (with line numbers):
+se.js: (Line numbers: 46, 47, 48)
+try-hack-options.js: (Line numbers: 17, 18, 19)
+
+
+
+Some APIs returned a default value when you passed the hostname of a non-hackable server (e.g., hacknet server) to them.
+These APIs now throw an error. The affected APIs are:
+- ns.hackAnalyzeThreads
+- ns.hackAnalyze
+- ns.hackAnalyzeSecurity
+- ns.hackAnalyzeChance
+- ns.growthAnalyze
+- ns.growthAnalyzeSecurity
+- ns.nuke
+- ns.brutessh
+- ns.ftpcrack
+- ns.relaysmtp
+- ns.httpworm
+- ns.sqlinject
+- ns.getServerMoneyAvailable
+- ns.getServerSecurityLevel
+- ns.getServerBaseSecurityLevel
+- ns.getServerMinSecurityLevel
+- ns.getServerRequiredHackingLevel
+- ns.getServerMaxMoney
+- ns.getServerGrowth
+- ns.getServerNumPortsRequired
+- ns.cloud.deleteServer
+- ns.getHackTime
+- ns.getGrowTime
+- ns.getWeakenTime
+
+
+Usage of the following functions may have been affected:
+ns.hackAnalyzeThreads
+ns.hackAnalyze
+ns.hackAnalyzeSecurity
+ns.hackAnalyzeChance
+ns.growthAnalyze
+ns.growthAnalyzeSecurity
+ns.nuke
+ns.brutessh
+ns.ftpcrack
+ns.relaysmtp
+ns.httpworm
+ns.sqlinject
+ns.getServerMoneyAvailable
+ns.getServerSecurityLevel
+ns.getServerBaseSecurityLevel
+ns.getServerMinSecurityLevel
+ns.getServerRequiredHackingLevel
+ns.getServerMaxMoney
+ns.getServerGrowth
+ns.getServerNumPortsRequired
+ns.deleteServer
+ns.getHackTime
+ns.getGrowTime
+ns.getWeakenTime
+
+Potentially affected files on server home (with line numbers):
+all-backdoor.js: (Line number: 30)
+duplicate.js: (Line numbers: 170, 189, 190, 191)
+nuke-all.js: (Line numbers: 35, 39, 43, 47, 51, 56)
+hack.js: (Line numbers: 15, 20, 24, 27, 30, 39, 43)
+hack-script/hack.js: (Line numbers: 11, 16, 23, 26, 35, 39)
+hack-script/aevum-police-hack.js: (Line numbers: 11, 16, 23, 26, 35, 39)
+hack-script/alpha-net-hack.js: (Line numbers: 11, 16, 23, 26, 35, 39)
+hack-script/catalyst-hack.js: (Line numbers: 11, 16, 23, 26, 35, 39)
+hack-script/computek-hack.js: (Line numbers: 11, 16, 23, 26, 35, 39)
+hack-script/hack-backup.js: (Line numbers: 11, 16, 23, 26, 35, 39)
+hack-script/ha-ck-backup.js: (Line numbers: 11, 16, 23, 26, 35, 39)
+hack-script/millenium-fitness-hack.js: (Line numbers: 11, 16, 23, 26, 35, 39)
+hack-script/netlink-hack.js: (Line numbers: 11, 16, 23, 26, 35, 39)
+hack-script/rho-construction-hack.js: (Line numbers: 11, 16, 23, 26, 35, 39)
+hack-script/rothman-uni-hack.js: (Line numbers: 11, 16, 23, 26, 35, 39)
+hack-script/summit-uni-hack.js: (Line numbers: 11, 16, 23, 26, 35, 39)
+hack-script/syscore-hack.js: (Line numbers: 11, 16, 23, 26, 35, 39)
+hack-script/the-hub-hack.js: (Line numbers: 11, 16, 23, 26, 35, 39)
+hack-script/lexo-corp.js: (Line numbers: 11, 16, 23, 26, 35, 39)
+hack-script/nectar-net-hack.js: (Line numbers: 11, 16, 23, 26, 35, 39)
+hack-script/lexo-corp-hack.js: (Line numbers: 11, 16, 23, 26, 35, 39)
+hack-script/omega-net-hack.js: (Line numbers: 11, 16, 23, 26, 35, 39)
+hack-script/snap-fitness-hack.js: (Line numbers: 11, 16, 23, 26, 35, 39)
+ha-ck.js: (Line numbers: 11, 16, 23, 26, 35, 39)
+megacorp-hack.js: (Line numbers: 15, 20, 24, 27, 30, 39, 43)
+zb-institute-hack.js: (Line numbers: 15, 20, 24, 27, 30, 39, 43)
+alpha-ent-hack.js: (Line numbers: 15, 20, 24, 27, 30, 39, 43)
+global-pharm-hack.js: (Line numbers: 15, 20, 24, 27, 30, 39, 43)
+aerocorp-hack.js: (Line numbers: 15, 20, 24, 27, 30, 39, 43)
+galactic-cyber-hack.js: (Line numbers: 15, 20, 24, 27, 30, 39, 43)
+deltaone-hack.js: (Line numbers: 15, 20, 24, 27, 30, 39, 43)
+unitalife-hack.js: (Line numbers: 15, 20, 24, 27, 30, 39, 43)
+omnia-hack.js: (Line numbers: 15, 20, 24, 27, 30, 39, 43)
+defcomm-hack.js: (Line numbers: 15, 20, 24, 27, 30, 39, 43)
+icarus-hack.js: (Line numbers: 15, 20, 24, 27, 30, 39, 43)
+solaris-hack.js: (Line numbers: 15, 20, 24, 27, 30, 39, 43)
+univ-energy-hack.js: (Line numbers: 15, 20, 24, 27, 30, 39, 43)
+zeus-med-hack.js: (Line numbers: 15, 20, 24, 27, 30, 39, 43)
+infocomm-hack.js: (Line numbers: 15, 20, 24, 27, 30, 39, 43)
+nova-med-hack.js: (Line numbers: 15, 20, 24, 27, 30, 39, 43)
+zb-def-hack.js: (Line numbers: 15, 20, 24, 27, 30, 39, 43)
+taiyang-digital-hack.js: (Line numbers: 15, 20, 24, 27, 30, 39, 43)
+applied-energetics-hack.js: (Line numbers: 15, 20, 24, 27, 30, 39, 43)
+titan-labs-hack.js: (Line numbers: 15, 20, 24, 27, 30, 39, 43)
+stormtech-hack.js: (Line numbers: 15, 20, 24, 27, 30, 39, 43)
+fulcrumtech-hack.js: (Line numbers: 15, 20, 24, 27, 30, 39, 43)
+kuai-gong-hack.js: (Line numbers: 15, 20, 24, 27, 30, 39, 43)
+omnitek-hack.js: (Line numbers: 15, 20, 24, 27, 30, 39, 43)
+4sigma-hack.js: (Line numbers: 15, 20, 24, 27, 30, 39, 43)
+nwo-hack.js: (Line numbers: 15, 20, 24, 27, 30, 39, 43)
+clarkinc-hack.js: (Line numbers: 15, 20, 24, 27, 30, 39, 43)
+b-and-a-hack.js: (Line numbers: 15, 20, 24, 27, 30, 39, 43)
+blade-hack.js: (Line numbers: 15, 20, 24, 27, 30, 39, 43)
+powerhouse-fitness-hack.js: (Line numbers: 15, 20, 24, 27, 30, 39, 43)
+ecorp-hack.js: (Line numbers: 15, 20, 24, 27, 30, 39, 43)
+auto-deploy.js: (Line numbers: 12, 13, 14, 15, 16)
+auto-purchase-server.js: (Line numbers: 16, 34)
+book-keeper.js: (Line numbers: 21, 22, 23, 24, 25)
+find-targets.js: (Line numbers: 23, 24, 25, 26, 27, 30, 68, 72, 91, 92, 93, 94, 95)
+gimme-money.js: (Line numbers: 4, 5, 8, 10)
+gimme-more-money.js: (Line numbers: 43, 44, 45, 46, 47, 95, 209, 213, 232, 237, 293, 294, 300, 304, 353, 354, 355, 364, 369, 372)
+kill-network-scripts.js: (Line numbers: 13, 14, 15, 16, 17, 51)
+launch-fleets.js: (Line numbers: 34, 35, 36, 37, 38, 99, 108, 113, 116)
+strategist.js: (Line numbers: 26, 27, 28, 29, 30, 57, 66, 73, 102, 106, 136)
+utils.js: (Line numbers: 48, 63, 80, 85, 90, 91)
+ap-hacknet-node.js: (Line number: 111)
+aps-lite.js: (Line numbers: 19, 26, 37)
+my-servers.js: (Line number: 7)
+try-hack-options.js: (Line numbers: 11, 12, 73, 76, 79, 80, 83, 86, 90, 93, 98, 102)
+harakiri-sushi-hack.js: (Line numbers: 15, 20, 24, 27, 30, 39, 43)
+foodnstuff-hack.js: (Line numbers: 15, 20, 24, 27, 30, 39, 43)
+sigma-cosmetics-hack.js: (Line numbers: 15, 20, 24, 27, 30, 39, 43)
+joesguns-hack.js: (Line numbers: 15, 20, 24, 27, 30, 39, 43)
+nectar-net-hack.js: (Line numbers: 15, 20, 24, 27, 30, 39, 43)
+hong-fang-tea-hack.js: (Line numbers: 15, 20, 24, 27, 30, 39, 43)
+n00dles-hack.js: (Line numbers: 15, 20, 24, 27, 30, 39, 43)
+iron-gym-hack.js: (Line numbers: 15, 20, 24, 27, 30, 39, 43)
+darkweb-hack.js: (Line numbers: 15, 20, 24, 27, 30, 39, 43)
+zer0-hack.js: (Line numbers: 15, 20, 24, 27, 30, 39, 43)
+max-hardware-hack.js: (Line numbers: 15, 20, 24, 27, 30, 39, 43)
+omega-net-hack.js: (Line numbers: 15, 20, 24, 27, 30, 39, 43)
+silver-helix-hack.js: (Line numbers: 15, 20, 24, 27, 30, 39, 43)
+phantasy-hack.js: (Line numbers: 15, 20, 24, 27, 30, 39, 43)
+neo-net-hack.js: (Line numbers: 15, 20, 24, 27, 30, 39, 43)
+crush-fitness-hack.js: (Line numbers: 15, 20, 24, 27, 30, 39, 43)
+the-hub-hack.js: (Line numbers: 15, 20, 24, 27, 30, 39, 43)
+computek-hack.js: (Line numbers: 15, 20, 24, 27, 30, 39, 43)
+johnson-ortho-hack.js: (Line numbers: 15, 20, 24, 27, 30, 39, 43)
+netlink-hack.js: (Line numbers: 15, 20, 24, 27, 30, 39, 43)
+catalyst-hack.js: (Line numbers: 15, 20, 24, 27, 30, 39, 43)
+rothman-uni-hack.js: (Line numbers: 15, 20, 24, 27, 30, 39, 43)
+syscore-hack.js: (Line numbers: 15, 20, 24, 27, 30, 39, 43)
+summit-uni-hack.js: (Line numbers: 15, 20, 24, 27, 30, 39, 43)
+rho-construction-hack.js: (Line numbers: 15, 20, 24, 27, 30, 39, 43)
+aevum-police-hack.js: (Line numbers: 15, 20, 24, 27, 30, 39, 43)
+millenium-fitness-hack.js: (Line numbers: 15, 20, 24, 27, 30, 39, 43)
+lexo-corp-hack.js: (Line numbers: 15, 20, 24, 27, 30, 39, 43)
+snap-fitness-hack.js: (Line numbers: 15, 20, 24, 27, 30, 39, 43)
+microdyne-hack.js: (Line numbers: 15, 20, 24, 27, 30, 39, 43)
+helios-hack.js: (Line numbers: 15, 20, 24, 27, 30, 39, 43)
+vitalife-hack.js: (Line numbers: 15, 20, 24, 27, 30, 39, 43)
+The-Cave-hack.js: (Line numbers: 15, 20, 24, 27, 30, 39, 43)
+fulcrumassets-hack.js: (Line numbers: 15, 20, 24, 27, 30, 39, 43)
+undefined-hack.js: (Line numbers: 11, 16, 23, 26, 35, 39)
+delete-server.js: (Line number: 5)
+deploy-on-home.js: (Line numbers: 126, 127, 128, 139, 156)
+w0r1d_d43m0n-hack.js: (Line numbers: 15, 20, 24, 27, 30, 39, 43)
+test-f.js: (Line numbers: 12, 13, 16, 16, 22)
+max-money.js: (Line numbers: 17, 23)
+
+
+
+The cloud server (purchased server) functions have been moved to their own interface, ns.cloud.
+"ns.getPurchasedServerCost()" was removed.
+It has been automatically replaced with "ns.cloud.getServerCost()"
+
+"ns.purchaseServer()" was removed.
+It has been automatically replaced with "ns.cloud.purchaseServer()"
+
+"ns.getPurchasedServerUpgradeCost()" was removed.
+It has been automatically replaced with "ns.cloud.getServerUpgradeCost()"
+
+"ns.upgradePurchasedServer()" was removed.
+It has been automatically replaced with "ns.cloud.upgradeServer()"
+
+"ns.renamePurchasedServer()" was removed.
+It has been automatically replaced with "ns.cloud.renameServer()"
+
+"ns.deleteServer()" was removed.
+It has been automatically replaced with "ns.cloud.deleteServer()"
+
+"ns.getPurchasedServers()" was removed.
+It has been automatically replaced with "ns.cloud.getServerNames()"
+
+"ns.getPurchasedServerLimit()" was removed.
+It has been automatically replaced with "ns.cloud.getServerLimit()"
+
+"ns.getPurchasedServerMaxRam()" was removed.
+It has been automatically replaced with "ns.cloud.getRamLimit()"
+
+Usage of the following functions may have been affected:
+ns.getPurchasedServerCost
+ns.purchaseServer
+ns.getPurchasedServerUpgradeCost
+ns.upgradePurchasedServer
+ns.renamePurchasedServer
+ns.deleteServer
+ns.getPurchasedServers
+ns.getPurchasedServerLimit
+ns.getPurchasedServerMaxRam
+
+Potentially affected files on server home (with line numbers):
+purchase-servers.js: (Line numbers: 4, 6)
+auto-purchase-server.js: (Line numbers: 9, 10, 16, 34, 48, 56, 74)
+aps-lite.js: (Line numbers: 13, 15, 19, 27, 37, 38, 47)
+my-servers.js: (Line numbers: 3, 7)
+delete-server.js: (Line number: 5)
+test-f.js: (Line number: 22)
+
+
+
+We added a new feature called Dark Net. The "darkweb" server is a darknet server now.
+Some APIs that require the target host to be a normal server do not work with darkweb. This should not be a 
+problem with most scripts. The most potentially affected API is "ns.scan()". Darkweb does not appear in the 
+result of this API anymore. If you want to find darknet servers, you need to use "ns.dnet.probe()".
+
+
+
+Accessing the hacknet namespace incurred a one-time cost of 4 GB of RAM, and each hacknet API did not incur 
+RAM cost. Now the hacknet namespace does not incur RAM cost, but each hacknet API incurs a 0.5GB RAM cost.
+
+Usage of the following functions may have been affected:
+ns.hacknet.numNodes
+ns.hacknet.purchaseNode
+ns.hacknet.getPurchaseNodeCost
+ns.hacknet.getNodeStats
+ns.hacknet.upgradeLevel
+ns.hacknet.upgradeRam
+ns.hacknet.upgradeCore
+ns.hacknet.upgradeCache
+ns.hacknet.getLevelUpgradeCost
+ns.hacknet.getRamUpgradeCost
+ns.hacknet.getCoreUpgradeCost
+ns.hacknet.getCacheUpgradeCost
+ns.hacknet.numHashes
+ns.hacknet.hashCost
+ns.hacknet.spendHashes
+ns.hacknet.maxNumNodes
+ns.hacknet.hashCapacity
+ns.hacknet.getHashUpgrades
+ns.hacknet.getHashUpgradeLevel
+ns.hacknet.getStudyMult
+ns.hacknet.getTrainingMult
+
+Potentially affected files on server home (with line numbers):
+hn.js: (Line numbers: 5, 7, 8, 9)
+increase-mega.js: (Line numbers: 4, 6, 7, 9)
+improve-study.js: (Line numbers: 4, 6, 7, 9)
+
+
+
+ns.cloud.purchaseServer() and ns.cloud.deleteServer() previously removed whitespace from the provided hostname inconsistently.
+They now use the hostname as provided.
+
+Usage of the following functions may have been affected:
+ns.cloud.purchaseServer
+ns.cloud.deleteServer
+
+Potentially affected files on server home (with line numbers):
+purchase-servers.js: (Line number: 4)
+auto-purchase-server.js: (Line numbers: 34, 48, 56)
+aps-lite.js: (Line numbers: 37, 38, 47)
+my-servers.js: (Line number: 7)
+delete-server.js: (Line number: 5)
+test-f.js: (Line number: 22)
