@@ -12,11 +12,17 @@ export async function main(ns) {
     const FILE_DIAG = "darknet-diagnostics.txt";
     // =========================================================================
 
-    // 🧹 INITIALIZATION PURGE: Truncate logs using the 'w' overwrite mode
+    // 🧹 INITIALIZATION PURGE: Wipe text logs AND clear stale port data streams
     ns.write(FILE_SUCCESS, "", "w");
     ns.write(FILE_DIAG, "", "w");
 
-    ns.tprint(`📊 [LOGGER] Dual-stream monitoring active.`);
+    // 🆕 Flush all darknet-related communication pipelines (10-16) on central boot
+    const portsToClear = [10, 11, 12, 13, 14, 15, 16];
+    for (const port of portsToClear) {
+        ns.clearPort(port);
+    }
+
+    ns.tprint(`📊 [LOGGER] Dual-stream monitoring active. Communication plumbing flushed clean.`);
     ns.tprint(`   ├── Stream A (Wins & Loot)      ──► Port ${PORT_SUCCESS} ──► ${FILE_SUCCESS}`);
     ns.tprint(`   └── Stream B (Specs & Failures) ──► Port ${PORT_DIAG} ──► ${FILE_DIAG}`);
 

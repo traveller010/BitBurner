@@ -78,16 +78,13 @@ export async function main(ns) {
                         const reward = ns.codingcontract.attempt(answer, file, server);
 
                         if (reward) {
-                            ns.tprint(`✅ [REWARD] Solved "${type}" on ${server}! Reward claimed: ${reward}`);
                             // SUCCESS CHANNEL: Pipe the win data directly to darknet-success.txt
                             ns.tryWritePort(PORT_SUCCESS, `[CONTRACT-SOLVED] [${server}] Cracked ${file} (${type})! Reward: ${reward}`);
                         } else {
-                            ns.tprint(`❌ [FAILURE] Solver returned an incorrect answer for "${type}" on ${server}. Check logic.`);
                             // DIAGNOSTICS CHANNEL: Send math mismatch metrics to darknet-diagnostics.txt
                             ns.tryWritePort(PORT_DIAG, `[CONTRACT-FAIL] [${server}] Incorrect submission for ${file} (${type}) with answer: ${JSON.stringify(answer)}`);
                         }
                     } catch (err) {
-                        ns.tprint(`💥 [ERROR] Solver crashed while processing "${type}" on ${server}: ${err}`);
                         // DIAGNOSTICS CHANNEL: Catch execution context errors
                         ns.tryWritePort(PORT_DIAG, `[CONTRACT-CRASH] [${server}] Logic exception on ${file} (${type}) | ${err}`);
                     }
