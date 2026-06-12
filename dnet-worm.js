@@ -5,7 +5,7 @@ const reportedStalls = new Set();
 const deadTopology = new Set();
 const localCooldowns = new Map();
 const scriptCost = 13.80;
-const WORM_VERSION = "v1.3.16";
+const WORM_VERSION = "v1.3.17";
 
 // Global Password Vault to permanently track cracked keys across resets
 let globalPasswordVault = {};
@@ -18,7 +18,7 @@ export async function main(ns) {
     const scriptName = ns.getScriptName();
 
     // =========================================================================
-    // í ½í´ SELF-HEALING DEPENDENCY BOOTLOADER & FILE INITIALIZATION
+    // \ud83d\udd01 SELF-HEALING DEPENDENCY BOOTLOADER & FILE INITIALIZATION
     // =========================================================================
     if (currentHost === "home") {
         const loggerScript = "dnet-logger.js";
@@ -74,7 +74,16 @@ export async function main(ns) {
         }
 
         if (currentHost !== "home" && currentHost !== "darkweb") {
-            try { await ns.dnet.memoryReallocation(); } catch (e) { ns.tryWritePort(14, `[EXCEPTION4] - ${e}`) }
+            try { 
+                let details = ns.dnet.getServerDetails(currentHost);
+                let safetyTimeout = 0;
+                while (details.ramBlocked > 0 && safetyTimeout < 30) {
+                    await ns.dnet.memoryReallocation();
+                    details = ns.dnet.getServerDetails(currentHost);
+                    safetyTimeout++;
+                    if (details.ramBlocked > 0) await ns.sleep(100);
+                }
+            } catch (e) { ns.tryWritePort(14, `[EXCEPTION4] - ${e}`) }
         }
 
         const cacheFiles = ns.ls(currentHost, '.cache');
@@ -86,33 +95,42 @@ export async function main(ns) {
         }
 
         // =========================================================================
-        // í ¼í¾¯ SPEARHEAD DEPTH PRIORITIZATION TUNNEL
+        // \ud83d\udd01 SPEARHEAD DEPTH PRIORITIZATION TUNNEL
         // =========================================================================
         const nearbyServers = ns.dnet.probe();
 
         const prioritizedTargets = nearbyServers.map(hostname => {
             try {
                 const details = ns.dnet.getServerDetails(hostname);
-                return { hostname, depth: details.depth || 0, modelId: details.modelId };
+                return {
+                    hostname,
+                    depth: details.depth || 0,
+                    modelId: details.modelId,
+                    isHighValue: (details.modelId === "(The Labyrinth)" || details.depth > 15)
+                };
             } catch (e) {
                 ns.tryWritePort(14, `[EXCEPTION6] - ${e}`)
-                return { hostname, depth: 0, modelId: "Unknown" };
+                return { hostname, depth: 0, modelId: "Unknown", isHighValue: false };
             }
-        }).sort((a, b) => b.depth - a.depth);
+        }).sort((a, b) => {
+            if (a.isHighValue && !b.isHighValue) return -1;
+            if (!a.isHighValue && b.isHighValue) return 1;
+            return b.depth - a.depth;
+        });
 
         // =========================================================================
-        // í ¼í¾¯ DETERMINISTIC HARDWARE ALLOCATION ENGINE (LINEAR SECURITY REGIME)
+        // \ud83d\udd01 DETERMINISTIC HARDWARE ALLOCATION ENGINE (LINEAR SECURITY REGIME)
         // =========================================================================
         for (const target of prioritizedTargets) {
             const hostname = target.hostname;
             if (hostname == null) continue;
             const isLabyrinth = target.modelId === "(The Labyrinth)" || hostname === "ub3r_l4byr1nth";
 
-            // í ½í¿© GATE 1: AUTHENTICATION & ACCESS VERIFICATION
+            // \ud83d\udd01 GATE 1: AUTHENTICATION & ACCESS VERIFICATION
             const authResult = await serverSolver(ns, hostname);
             if (!authResult || !authResult.success) continue;
 
-            // í ½í¿© GATE 2: ADMINISTRATIVE AUDIT
+            // \ud83d\udd01 GATE 2: ADMINISTRATIVE AUDIT
             try {
                 let activeProcesses = ns.ps(hostname);
                 let runningWormInstance = activeProcesses.find(p => p.filename === scriptName);
@@ -131,13 +149,13 @@ export async function main(ns) {
                 ns.tryWritePort(14, `[EXCEPTION-1] Admin Audit Failure on ${hostname} - ${e}`);
             }
 
-            // í ½í¿© GATE 3: HARDWARE METRIC PROBE
+            // \ud83d\udd01 GATE 3: HARDWARE METRIC PROBE
             const targetMaxRam = ns.getServerMaxRam(hostname);
             const targetUsedRam = ns.getServerUsedRam(hostname);
             const targetFreeRam = targetMaxRam - targetUsedRam;
             const bootstrapper = "dnet-bootstrap.js";
 
-            // í ½í¿© GATE 4: FORCE PAYLOAD OVERWRITE
+            // \ud83d\udd01 GATE 4: FORCE PAYLOAD OVERWRITE
             try {
                 ns.scp(bootstrapper, hostname, currentHost);
                 ns.scp(scriptName, hostname, currentHost);
@@ -145,7 +163,7 @@ export async function main(ns) {
                 ns.tryWritePort(14, `[EXCEPTION-2] SCP Payload Transfer Failure to ${hostname} - ${e}`);
             }
 
-            // í ½í¿© GATE 5: BLOCKED SYSTEM ALLOCATION FALLBACK
+            // \ud83d\udd01 GATE 5: BLOCKED SYSTEM ALLOCATION FALLBACK
             if (targetFreeRam < scriptCost && targetMaxRam >= scriptCost && !isLabyrinth) {
                 ns.tryWritePort(14, `[RAM-BLOCKED] Host: ${hostname} | Free: ${targetFreeRam}GB / Max: ${targetMaxRam}GB. Deploying lightweight bootstrapper...`);
 
@@ -162,13 +180,21 @@ export async function main(ns) {
                 continue;
             }
 
-            // í ½í¿© GATE 6: INSUFFICIENT HARDWARE BYPASS
+            // \ud83d\udd01 GATE 6: INSUFFICIENT HARDWARE BYPASS
             if (targetMaxRam < scriptCost && !isLabyrinth) {
-                ns.tryWritePort(14, `[RAM-INSUFFICIENT] Host: ${hostname} | Max RAM (${targetMaxRam}GB) cannot support monolith cost (${scriptCost}GB). Bypass logged.`);
+                if (targetMaxRam === 0) {
+                    ns.tryWritePort(14, `[RAM-ZERO] Host: ${hostname} | Inducing migration...`);
+                    for (let j = 0; j < 5; j++) {
+                        await ns.dnet.induceServerMigration(hostname);
+                        await ns.sleep(40);
+                    }
+                } else {
+                    ns.tryWritePort(14, `[RAM-INSUFFICIENT] Host: ${hostname} | Max RAM (${targetMaxRam}GB) cannot support monolith cost (${scriptCost}GB). Bypass logged.`);
+                }
                 continue;
             }
 
-            // í ½í¿© GATE 7: STANDARD EXECUTION DISPATCH
+            // \ud83d\udd01 GATE 7: STANDARD EXECUTION DISPATCH
             if (authResult.alreadyActive && !isLabyrinth) {
                 try {
                     ns.exec(scriptName, hostname, { threads: 1, preventDuplicates: true }, WORM_VERSION);
@@ -241,7 +267,7 @@ async function serverSolver(ns, hostname) {
             if (checkDetails.hasSession) {
                 return { success: true, modelId: details.modelId, duration: 0, password: globalPasswordVault[hostname], alreadyActive: true };
             } else {
-                ns.tryWritePort(14, `âš ï¸ [VAULT-STALE] Stale password rejected for ${hostname}. Purging key.`);
+                ns.tryWritePort(14, `\\u26a0\\ufe0f [VAULT-STALE] Stale password rejected for ${hostname}. Purging key.`);
                 delete globalPasswordVault[hostname];
             }
         } catch (e) { 
@@ -282,7 +308,7 @@ async function serverSolver(ns, hostname) {
         let exceptionKey = `${hostname}-${fatalException.toString()}`;
 
         if (!reportedUnknowns.has(exceptionKey)) {
-            ns.tryWritePort(14, `í ½íº¨ [MATRIX-CRASH] Unhandled runtime exception on ${hostname} (${details.modelId}): ${fatalException.message || fatalException}`);
+            ns.tryWritePort(14, `\ud83d\udd01 [MATRIX-CRASH] Unhandled runtime exception on ${hostname} (${details.modelId}): ${fatalException.message || fatalException}`);
             reportedUnknowns.add(exceptionKey);
         }
         return false;
@@ -293,7 +319,7 @@ async function serverSolver(ns, hostname) {
 }
 
 /**
- * í ½íº¨ AUTOMATED TERMINAL EMULATOR: Captures and stringifies full background UI states to Port 14.
+ * \ud83d\udd01 AUTOMATED TERMINAL EMULATOR: Captures and stringifies full background UI states to Port 14.
  * @param {NS} ns
  * @param {string} hostname
  * @param {any} details
@@ -302,7 +328,8 @@ async function dumpDetailedDiagnostic(ns, hostname, details) {
     const divider = "=".repeat(80);
     let logBuffer = [];
 
-    logBuffer.push(`\ní ½íº¨ [STALL-ALERT] FULL METADATA DUMP FOR UNRESOLVED HOST: ${hostname}`);
+    logBuffer.push(`
+\ud83d\udd01 [STALL-ALERT] FULL METADATA DUMP FOR UNRESOLVED HOST: ${hostname}`);
     logBuffer.push(divider);
     logBuffer.push(`[UI FIELDS] Model: ${details.modelId}`);
     logBuffer.push(`[UI FIELDS] Hint:  ${details.passwordHint}`);
@@ -320,12 +347,13 @@ async function dumpDetailedDiagnostic(ns, hostname, details) {
             logBuffer.push(`[FIREWALL RESPONSE] Msg:    ${hb.message || "Unauthorized"}`);
             logBuffer.push(divider);
             let stringifiedHB = JSON.stringify(hb, null, 2);
-            logBuffer.push(`[RAW LOGS] hb:\n${stringifiedHB}`);
+            logBuffer.push(`[RAW LOGS] hb:
+${stringifiedHB}`);
         }
     } catch (e) { ns.tryWritePort(14, `[EXCEPTION13] - ${e}`) }
 
     logBuffer.push(divider);
-    let finalDiagnosticReport = logBuffer.join("\n");
+    let finalDiagnosticReport = logBuffer.join("");
     ns.tryWritePort(14, finalDiagnosticReport);
 }
 
@@ -410,7 +438,8 @@ async function executeCrackingMatrix(ns, hostname, details) {
             }
 
             let accountsGuesses = 0;
-            while (low <= high && accountsGuesses < 15) {
+            let searchLimit = Math.ceil(Math.log2(high - low + 1) * 1.1) + 2;
+            while (low <= high && accountsGuesses < searchLimit) {
                 accountsGuesses++;
                 let mid = Math.floor((low + high) / 2);
                 let guessStr = mid.toString().padStart(fiLen, '0');
@@ -463,7 +492,9 @@ async function executeCrackingMatrix(ns, hostname, details) {
                     let high = maxVal;
                     let bGuesses = 0;
 
-                    while (low <= high && bGuesses < 15) {
+                    let searchLimit = Math.ceil(Math.log2(high - low + 1) * 1.1) + 2;
+
+                    while (low <= high && bGuesses < searchLimit) {
                         bGuesses++;
                         let mid = Math.floor((low + high) / 2);
                         let guess = mid.toString().padStart(bLen, '0');
@@ -858,7 +889,7 @@ async function executeCrackingMatrix(ns, hostname, details) {
                 for (let i = 0; i < logsArr.length; i++) {
                     let logStr = typeof logsArr[i] === 'object' ? JSON.stringify(logsArr[i]) : String(logsArr[i]);
                     let m = logStr.match(/"data"\s*:\s*"([^"]+)"/);
-                    if (m) rawData = m[1].replace(/\\n/g, '\n');
+                    if (m) rawData = m[1].replace(/"\/g"/, '');
 
                     let reportMatch = logStr.match(/\{"coords":\[\d+,\d+\],.*?\}/);
                     if (reportMatch) {
@@ -873,7 +904,7 @@ async function executeCrackingMatrix(ns, hostname, details) {
                     continue;
                 }
 
-                if (rawData.includes("!!") || !rawData.includes("â–ˆ")) {
+                if (rawData.includes("!!") || !rawData.includes("\\u2588")) {
                     let finalPass = rawData.trim();
                     if ((await ns.dnet.authenticate(hostname, finalPass)).success) {
                         ns.write(saveFile, "", "w");
@@ -1000,7 +1031,7 @@ async function executeCrackingMatrix(ns, hostname, details) {
             if (pHb && pHb.logs) {
                 let pLogStr = Array.isArray(pHb.logs) ? JSON.stringify(pHb.logs) : String(pHb.logs);
                 pLogStr = pLogStr.replace(/\\/g, '');
-                let prefixMatch = pLogStr.match(/expected '([^â– ']+)/i) || pLogStr.match(/passwordExpected:\s*([^â– \s]+)/i);
+                let prefixMatch = pLogStr.match(/expected '([^\\u25a0']+)/i) || pLogStr.match(/passwordExpected:\s*([^\\u25a0\s]+)/i);
                 let knownPrefix = prefixMatch ? prefixMatch[1] : "";
                 let pool = Array.from(new Set(pLogStr.replace(/[^a-zA-Z0-9]/g, '').split('')));
                 if (knownPrefix && pLength - knownPrefix.length === 3) {
@@ -1125,89 +1156,68 @@ async function executeCrackingMatrix(ns, hostname, details) {
         case "DeepGreen": {
             let dgLen = details.passwordLength || 3;
             const tFormat = details.passwordFormat || "numeric";
-
             let pool = "0123456789";
             if (tFormat === "alphanumeric") {
                 pool = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
             } else if (tFormat === "alphabetic") {
                 pool = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
             }
-
-            let dgCants = [];
-            const generateCombos = (prefix, depth) => {
-                if (depth === 0) {
-                    dgCants.push(prefix);
-                    return;
+            const clues = [];
+            const checkCandidate = (cand) => {
+                for (const clue of clues) {
+                    let exact = 0, wrong = 0;
+                    let cArr = cand.split(""), gArr = clue.guess.split("");
+                    for (let j = 0; j < dgLen; j++) {
+                        if (cArr[j] === gArr[j]) { exact++; cArr[j] = null; gArr[j] = null; }
+                    }
+                    for (let j = 0; j < dgLen; j++) {
+                        if (gArr[j] !== null) {
+                            let idx = cArr.indexOf(gArr[j]);
+                            if (idx !== -1) { wrong++; cArr[idx] = null; }
+                        }
+                    }
+                    if (exact !== clue.exact || wrong !== clue.wrong) return false;
+                }
+                return true;
+            };
+            let yieldCounter = 0;
+            const findNextCandidate = async (prefix) => {
+                if (prefix.length === dgLen) {
+                    return checkCandidate(prefix) ? prefix : null;
                 }
                 for (let i = 0; i < pool.length; i++) {
-                    generateCombos(prefix + pool[i], depth - 1);
+                    yieldCounter++;
+                    if (yieldCounter % 5000 === 0) await ns.sleep(0);
+                    let res = await findNextCandidate(prefix + pool[i]);
+                    if (res) return res;
                 }
+                return null;
             };
-            generateCombos("", dgLen);
-
             let mastermindRuns = 0;
-            while (dgCants.length > 0 && mastermindRuns < 120) {
+            let currentGuess = pool[0].repeat(dgLen);
+            while (mastermindRuns < 120) {
                 mastermindRuns++;
-                let currentGuess = dgCants[0];
-
                 const res = await ns.dnet.authenticate(hostname, currentGuess);
-                if (res.success) {
-                    return { success: true, password: currentGuess };
-                }
-
-                let targetExact = null;
-                let targetWrong = null;
-                let lStr = "";
-                let guesses = 0;
-
+                if (res.success) return { success: true, password: currentGuess };
+                let targetExact = null, targetWrong = null, lStr = "", guesses = 0;
                 while (guesses < 15) {
                     await ns.sleep(40);
                     let h = await ns.dnet.heartbleed(hostname, { peek: true });
                     lStr = Array.isArray(h?.logs) ? JSON.stringify(h.logs) : String(h?.logs || "");
-                    lStr = lStr.replace(/\\/g, '');
-
-                    if (lStr.includes(`"passwordAttempted":"${currentGuess}"`) || lStr.includes(`passwordAttempted: ${currentGuess}`)) {
-                        break;
-                    }
+                    lStr = lStr.replace(/\\/g, "");
+                    if (lStr.includes(`"passwordAttempted":"${currentGuess}"`) || lStr.includes(`passwordAttempted: ${currentGuess}`)) break;
                     guesses++;
                 }
-
-                let dataMatch = lStr.match(/"data"\s*:\s*"(\d+),(\d+)"/) || lStr.match(/data:\s*(\d+),(\d+)/);
-                if (dataMatch) {
-                    targetExact = parseInt(dataMatch[1], 10);
-                    targetWrong = parseInt(dataMatch[2], 10);
+                let dMatch = lStr.match(/"data"\s*:\s*"(\d+),(\d+)"/) || lStr.match(/data:\s*(\d+),(\d+)/);
+                if (dMatch) {
+                    targetExact = parseInt(dMatch[1], 10);
+                    targetWrong = parseInt(dMatch[2], 10);
+                    clues.push({ guess: currentGuess, exact: targetExact, wrong: targetWrong });
                 }
-
-                if (targetExact === null || targetWrong === null) {
-                    dgCants.shift();
-                    continue;
-                }
-
-                dgCants = dgCants.filter(cand => {
-                    let exact = 0;
-                    let wrong = 0;
-                    let cArr = cand.split('');
-                    let gArr = currentGuess.split('');
-
-                    for (let j = 0; j < dgLen; j++) {
-                        if (cArr[j] === gArr[j]) {
-                            exact++;
-                            cArr[j] = null;
-                            gArr[j] = null;
-                        }
-                    }
-
-                    for (let j = 0; j < dgLen; j++) {
-                        if (gArr[j] !== null) {
-                            let idx = cArr.indexOf(gArr[j]);
-                            if (idx !== -1) {
-                                wrong++;
-                                cArr[idx] = null;
-                            }
-                        }
-                    }
-                    return exact === targetExact && wrong === targetWrong;
-                });
+                yieldCounter = 0;
+                let nextCand = await findNextCandidate("");
+                if (!nextCand) break;
+                currentGuess = nextCand;
             }
             return { success: false };
         }
@@ -1290,36 +1300,36 @@ async function executeCrackingMatrix(ns, hostname, details) {
         case "EuroZone Free": {
             const euCountries = [
                 "albania", "andorra", "andorra la vella", "austria", "balgariya", "belarus",
-                "belgien", "belgique", "belgium", "belgiÃ«", "belorussia", "bih",
+                "belgien", "belgique", "belgium", "belgi\u00eb", "belorussia", "bih",
                 "bosna i hercegovina", "bosnia", "bosnia & herzegovina", "bosnia and hercegovina",
                 "bosnia-herzegovina", "brd", "britain", "bssr", "bulgaria", "bulgariya",
                 "byelorussia", "ceska republika", "cesko", "ch", "citta del vaticano",
-                "confoederatio helvetica", "confÅ“deratio helvetica", "crna gora", "croatia",
+                "confoederatio helvetica", "conf\u0153deratio helvetica", "crna gora", "croatia",
                 "croatie", "cyprus", "czech republic", "czechia", "czechoslovakia", "danmark",
                 "denmark", "deutschland", "east germany", "eesti", "eesti vabariik", "eire",
-                "ellada", "elliniki dimokratia", "espana", "espaÃ±a", "estonia",
+                "ellada", "elliniki dimokratia", "espana", "espa\u00f1a", "estonia",
                 "federal republic of germany", "finland", "france", "french republic", "frg",
-                "fuerstentum liechtenstein", "fyrom", "fÃ¼rstentum liechtenstein", "gb", "georgia",
+                "fuerstentum liechtenstein", "fyrom", "f\u00fcrstentum liechtenstein", "gb", "georgia",
                 "germany", "grand duchy of luxembourg", "grand-duche de luxembourg",
-                "grand-duchÃ© de luxembourg", "great britain", "great britain & ni", "greece",
-                "groÃŸherzogtum luxemburg", "gruziya", "hellas", "hellenic republic", "holland",
+                "grand-duch\u00e9 de luxembourg", "great britain", "great britain & ni", "greece",
+                "gro\u00dfherzogtum luxemburg", "gruziya", "hellas", "hellenic republic", "holland",
                 "hrvatska", "hrvatska republika", "hungarian republic", "hungary", "iceland",
                 "ireland", "irish free state", "island", "italia", "italian republic", "italy",
                 "kazakhstan", "kazakstan", "kibris", "kingdom of belgium", "kingdom of denmark",
                 "kingdom of greece", "kingdom of norway", "kingdom of sweden", "kingdom of the netherlands",
-                "kongeriget danmark", "koninkrijk belgiÃ«", "konungariket sverige", "kosova",
-                "kosovo", "kosovo i metohija", "kroatien", "kypros", "kÃ¶nigreich belgien",
-                "kÃ¶nigreich spanien", "la france", "latvia", "latvija", "latvijas republika",
+                "kongeriget danmark", "koninkrijk belgi\u00eb", "konungariket sverige", "kosova",
+                "kosovo", "kosovo i metohija", "kroatien", "kypros", "k\u00f6nigreich belgien",
+                "k\u00f6nigreich spanien", "la france", "latvia", "latvija", "latvijas republika",
                 "letzebuerg", "liechtenstein", "lietuva", "lietuvos respublika", "lithuania",
-                "luxembourg", "lydveldid island", "lÃ«tzebuerg", "lÃ½Ã°veldiÃ° Ã­sland", "macedonia",
+                "luxembourg", "lydveldid island", "l\u00ebtzebuerg", "l\u00fd\u00f0veldi\u00f0 \u00edsland", "macedonia",
                 "magyarorszag", "malta", "moldavia", "moldova", "monaco", "montenegro",
                 "most serene republic of san marino", "nederland", "netherlands", "noreg", "norge",
                 "north macedonia", "norway", "oesterreich", "osterreich", "people's socialist republic of albania",
-                "peoples socialist republic of albania", "poblacht na heireann", "poblacht na hÃ©ireann",
+                "peoples socialist republic of albania", "poblacht na heireann", "poblacht na h\u00e9ireann",
                 "poland", "polska", "portugal", "principality andorra", "principality monaco",
                 "principality of andorra", "principality of liechtenstein", "principality of monaco",
                 "principante de monaco", "principalt d'andorra", "principat d'andorra",
-                "principat dandorra", "qazaqstan", "reino de espana", "reino de espaÃ±a",
+                "principat dandorra", "qazaqstan", "reino de espana", "reino de espa\u00f1a",
                 "repubblica di san marino", "repubblica italiana", "repubblika ta malta",
                 "repubblika ta' malta", "republic of albania", "republic of andorra",
                 "republic of austria", "republic of belarus", "republic of croatia",
@@ -1330,16 +1340,16 @@ async function executeCrackingMatrix(ns, hostname, details) {
                 "republic of luxembourg", "republic of malta", "republic of moldova",
                 "republic of north macedonia", "republic of poland", "republic of san marino",
                 "republic of serbia", "republic of spain", "republic of turkey",
-                "republic of turkiye", "republic of tÃ¼rkiye", "republic of ukraine",
-                "republica moldova", "republica portuguesa", "republik Ã¶sterreich",
-                "republika e shqipÃ«risÃ«", "republika slovenija", "republika srbija",
+                "republic of turkiye", "republic of t\u00fcrkiye", "republic of ukraine",
+                "republica moldova", "republica portuguesa", "republik \u00f6sterreich",
+                "republika e shqip\u00ebris\u00eb", "republika slovenija", "republika srbija",
                 "republiken finland", "republik bulgarien", "republik slowenien",
-                "repÃºblica portuguesa", "romania", "romÃ¢nia", "rossiya", "rossiyskaya federatsiya",
+                "rep\u00fablica portuguesa", "romania", "rom\u00e2nia", "rossiya", "rossiyskaya federatsiya",
                 "roumania", "royaume de belgique", "rumania", "russia", "russian federation",
-                "rzeczpospolita polska", "rÃ©publique franÃ§aise", "sakartvelo", "san marino",
+                "rzeczpospolita polska", "r\u00e9publique fran\u00e7aise", "sakartvelo", "san marino",
                 "san marino republic", "schweiz", "serbia", "severna makedonija", "shqiperi",
-                "shqiperia", "shqipÃ«ri", "shqipÃ«ria", "slovak republic", "slovakia",
-                "slovenia", "slovenija", "slovenska republika", "slovensko", "slovenskÃ¡ republika",
+                "shqiperia", "shqip\u00ebri", "shqip\u00ebria", "slovak republic", "slovakia",
+                "slovenia", "slovenija", "slovenska republika", "slovensko", "slovensk\u00e1 republika",
                 "southern cyprus", "southern ireland", "soviet union", "spain", "srbija",
                 "state of vatican city", "status civitatis vaticanae", "suisse", "suomen tasavalta",
                 "suomi", "sverige", "svizzera", "sweden", "swiss confederation", "switzerland",
@@ -1347,12 +1357,12 @@ async function executeCrackingMatrix(ns, hostname, details) {
                 "the holy see vatican", "the irish free state", "the kingdom of spain",
                 "the russian empire", "the slovak republic", "the swiss federation", "the ukraine",
                 "the united kingdom", "the vatican", "turkey", "turkiye", "turkiye cumhuriyeti",
-                "tÃ¼rkiye", "tÃ¼rkiye cumhuriyeti", "ukraina", "ukraine", "ukrayina", "united kingdom",
+                "t\u00fcrkiye", "t\u00fcrkiye cumhuriyeti", "ukraina", "ukraine", "ukrayina", "united kingdom",
                 "united kingdom of gb", "united kingdom of great britain and northern ireland",
                 "ussr", "vatican", "vatican city", "vatican city state", "west germany",
-                "white russia", "yugoslavia", "Ã©ire", "Ã­sland", "Ã¶sterreich", "Äesko", "ÄeskÃ¡ republika",
+                "white russia", "yugoslavia", "\u00e9ire", "\u00edsland", "\u00f6sterreich", "\u010desko", "\u010desk\u00e1 republika",
                 "gibraltar", "faroe islands", "faeroe islands", "isle of man", "greenland",
-                "guernsey", "jersey", "svalbard", "aland", "Ã¥land", "england", "scotland", "wales",
+                "guernsey", "jersey", "svalbard", "aland", "\u00e5land", "england", "scotland", "wales",
                 "northern ireland", "armenia", "azerbaijan", "republic of armenia", "republic of azerbaijan",
                 "akrotiri and dhekelia", "akrotiri", "dhekelia", "transnistria", "abkhazia", "south ossetia",
                 "northern cyprus", "turkish republic of northern cyprus"
@@ -1509,10 +1519,10 @@ async function executeCrackingMatrix(ns, hostname, details) {
                 try {
                     let cleanExpr = String(details.data).split(',')[0];
 
-                    cleanExpr = cleanExpr.replace(/Ò³/g, '*')
-                        .replace(/âž•/g, '+')
-                        .replace(/âž–/g, '-')
-                        .replace(/Ã·/g, '/');
+                    cleanExpr = cleanExpr.replace(/\u04b3/g, '*')
+                        .replace(/\u2795/g, '+')
+                        .replace(/\u2796/g, '-')
+                        .replace(/\u00f7/g, '/');
 
                     if (/^[0-9+\-*/().\s]+$/.test(cleanExpr)) {
                         const evalRes = Function(`return (${cleanExpr})`)();
@@ -1609,7 +1619,7 @@ async function executeCrackingMatrix(ns, hostname, details) {
 }
 
 /**
- * í ½í»¡ï¸ SHARDED & INSTRUMENTED MUTEX: Spreads locks across ports 10-13 and logs pool sizes.
+ * \ud83d\udd01\ufe0f SHARDED & INSTRUMENTED MUTEX: Spreads locks across ports 10-13 and logs pool sizes.
  * @param {NS} ns */
 function acquireNetworkLock(ns, hostname, modelId) {
     let hash = 0;
@@ -1656,7 +1666,7 @@ function acquireNetworkLock(ns, hostname, modelId) {
 }
 
 /**
- * í ½í»¡ï¸ SHARDED MUTEX CLEANUP: Releases the lock on the correct shard and applies back-off cooldown.
+ * \ud83d\udd01\ufe0f SHARDED MUTEX CLEANUP: Releases the lock on the correct shard and applies back-off cooldown.
  * @param {NS} ns */
 function releaseNetworkLock(ns, hostname) {
     let hash = 0;
