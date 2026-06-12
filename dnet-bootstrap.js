@@ -2,22 +2,24 @@
 export async function main(ns) {
     const currentHost = ns.args[1];
     const masterWorm = "dnet-worm.js";
-    // Read the incoming version argument forwarded by the parent server pass
-    const currentVersion = ns.args[0] || "v1.0.0";
+    const workerScript = "dnet-worker.js";
+    const version = ns.args[0] || "v1.4.0";
 
     try {
-        await ns.dnet.memoryReallocation();
-        await ns.sleep(100);
-
-        // Launch the master worm thread sealed with its tracking signature
-        let pid = ns.exec(masterWorm, currentHost, { threads: 1, preventDuplicates: true }, currentVersion);
-        if (pid == 0) {
-            ns.tryWritePort(14, `[BOOTSTRAP FAIL] - ${currentHost} - pid = 0`);
+        // Repeated reallocation is needed on darknet servers
+        for (let i = 0; i < 5; i++) {
+            await ns.dnet.memoryReallocation();
+            await ns.sleep(200);
         }
-        else {
-            ns.tryWritePort(15, `[BOOTSTRAP SUCCESS] - started worm on ${currentHost}`);
+
+        let pid = ns.exec(masterWorm, currentHost, 1, version);
+        if (pid == 0) {
+            ns.tryWritePort(14, `[BOOT-FAIL] ${currentHost} - RAM still blocked.`);
+        } else {
+            ns.tryWritePort(15, `[BOOT-SUCCESS] ${currentHost} worm started.`);
+            if (ns.getServerMaxRam(currentHost) >= 15) ns.exec(workerScript, currentHost);
         }
     } catch (e) {
-        ns.tryWritePort(14, `[BOOTSTRAP-EXCEPTION] - ${e}`);
+        ns.tryWritePort(14, `[BOOT-EX] ${currentHost} ${e}`);
     }
 }
