@@ -59,6 +59,37 @@ export async function main(ns) {
             if (vaultUpdated) {
                 ns.write("darknet-keys.txt", JSON.stringify(globalPasswordVault), "w");
             }
+
+            // =========================================================================
+            // 🔒 AUTOMATED STASIS LINK STEWARDSHIP
+            // =========================================================================
+            try {
+                const crackedHosts = Object.keys(globalPasswordVault);
+                const candidates = [];
+                for (const host of crackedHosts) {
+                    try {
+                        const d = ns.dnet.getServerDetails(host);
+                        if (d && d.isOnline) {
+                            candidates.push({
+                                host,
+                                depth: d.depth || 0,
+                                isLabyrinth: d.modelId === "(The Labyrinth)" || host === "ub3r_l4byr1nth"
+                            });
+                        }
+                    } catch { /* Unreachable or moved */ }
+                }
+
+                candidates.sort((a, b) => {
+                    if (a.isLabyrinth && !b.isLabyrinth) return -1;
+                    if (!a.isLabyrinth && b.isLabyrinth) return 1;
+                    return b.depth - a.depth;
+                });
+
+                const top3 = candidates.slice(0, 3);
+                for (const target of top3) {
+                    ns.dnet.setStasisLink(target.host);
+                }
+            } catch (e) { ns.tryWritePort(14, `[STASIS-ERROR] - ${e}`) }
         } else {
             try {
                 if (ns.fileExists("darknet-keys.txt", "home")) {
@@ -171,7 +202,11 @@ export async function main(ns) {
                     let bootPid = ns.exec(bootstrapper, hostname, { threads: 1, preventDuplicates: true }, WORM_VERSION, hostname);
                     if (bootPid === 0) {
                         if (!ns.ps(hostname).find(p => p.filename === bootstrapper || p.filename === "dnet-worm.js")) {
-                            ns.tryWritePort(14, `[DEPLOY-FAIL] Host: ${hostname} | Even bootstrapper failed to clear allocation space.`);
+                            ns.tryWritePort(14, `[DEPLOY-FAIL] Host: ${hostname} | Bootstrapper failed. Clearing processes to reclaim space...`);
+                            ns.killall(hostname);
+                            await ns.sleep(200);
+                            bootPid = ns.exec(bootstrapper, hostname, { threads: 1, preventDuplicates: true }, WORM_VERSION, hostname);
+                            if (bootPid === 0) ns.tryWritePort(14, `[FATAL-ALLOCATION] ${hostname} remains blocked after killall.`);
                         }
                     }
                 } catch (e) {
@@ -182,14 +217,10 @@ export async function main(ns) {
 
             // \ud83d\udd01 GATE 6: INSUFFICIENT HARDWARE BYPASS
             if (targetMaxRam < scriptCost && !isLabyrinth) {
-                if (targetMaxRam === 0) {
-                    ns.tryWritePort(14, `[RAM-ZERO] Host: ${hostname} | Inducing migration...`);
-                    for (let j = 0; j < 5; j++) {
-                        await ns.dnet.induceServerMigration(hostname);
-                        await ns.sleep(40);
-                    }
-                } else {
-                    ns.tryWritePort(14, `[RAM-INSUFFICIENT] Host: ${hostname} | Max RAM (${targetMaxRam}GB) cannot support monolith cost (${scriptCost}GB). Bypass logged.`);
+                ns.tryWritePort(14, `[RAM-INSUFFICIENT] Host: ${hostname} | Max RAM (${targetMaxRam}GB) < ${scriptCost}GB. Inducing migration...`);
+                for (let j = 0; j < 5; j++) {
+                    await ns.dnet.induceServerMigration(hostname);
+                    await ns.sleep(40);
                 }
                 continue;
             }
@@ -377,6 +408,25 @@ async function executeCrackingMatrix(ns, hostname, details) {
         return val;
     };
 
+    const getLogEntry = async (guess) => {
+        const guessStr = String(guess);
+        for (let retry = 0; retry < 15; retry++) {
+            let hb = await ns.dnet.heartbleed(hostname, { peek: true });
+            if (hb && hb.logs) {
+                let logsArr = Array.isArray(hb.logs) ? hb.logs : [hb.logs];
+                for (let entry of logsArr) {
+                    let logStr = typeof entry === 'object' ? JSON.stringify(entry) : String(entry);
+                    // Match both quoted and unquoted versions of the guess
+                    if (logStr.includes(`"${guessStr}"`) || logStr.includes(`: ${guessStr}`)) {
+                        return logStr;
+                    }
+                }
+            }
+            await ns.sleep(50);
+        }
+        return null;
+    };
+
     switch (details.modelId) {
         case "ZeroLogon":
             return { success: (await ns.dnet.authenticate(hostname, "")).success, password: "" };
@@ -438,28 +488,17 @@ async function executeCrackingMatrix(ns, hostname, details) {
             }
 
             let accountsGuesses = 0;
-            let searchLimit = Math.ceil(Math.log2(high - low + 1) * 1.1) + 2;
+            let searchLimit = Math.ceil(Math.log2(high - low + 1) * 1.1) + 5;
             while (low <= high && accountsGuesses < searchLimit) {
                 accountsGuesses++;
                 let mid = Math.floor((low + high) / 2);
                 let guessStr = mid.toString().padStart(fiLen, '0');
 
                 if ((await ns.dnet.authenticate(hostname, guessStr)).success) return { success: true, password: guessStr };
-                await ns.sleep(40);
 
-                let hb = await ns.dnet.heartbleed(hostname, { peek: true });
-                if (hb && hb.logs) {
-                    let logsArr = Array.isArray(hb.logs) ? hb.logs : [hb.logs];
-                    let feedbackText = "";
-
-                    for (let i = 0; i < logsArr.length; i++) {
-                        let logStr = typeof logsArr[i] === 'object' ? JSON.stringify(logsArr[i]) : String(logsArr[i]).toLowerCase();
-                        if (logStr.includes(`"passwordattempted":"${guessStr}"`) || logStr.includes(`passwordattempted: ${guessStr}`)) {
-                            feedbackText = logStr;
-                            break;
-                        }
-                    }
-
+                let feedbackText = await getLogEntry(guessStr);
+                if (feedbackText) {
+                    feedbackText = feedbackText.toLowerCase();
                     if (feedbackText.includes("higher")) {
                         low = mid + 1;
                     } else if (feedbackText.includes("lower")) {
@@ -492,7 +531,7 @@ async function executeCrackingMatrix(ns, hostname, details) {
                     let high = maxVal;
                     let bGuesses = 0;
 
-                    let searchLimit = Math.ceil(Math.log2(high - low + 1) * 1.1) + 2;
+                    let searchLimit = Math.ceil(Math.log2(high - low + 1) * 1.1) + 5;
 
                     while (low <= high && bGuesses < searchLimit) {
                         bGuesses++;
@@ -500,21 +539,10 @@ async function executeCrackingMatrix(ns, hostname, details) {
                         let guess = mid.toString().padStart(bLen, '0');
 
                         if ((await ns.dnet.authenticate(hostname, guess)).success) return { success: true, password: guess };
-                        await ns.sleep(40);
 
-                        let hb = await ns.dnet.heartbleed(hostname, { peek: true });
-                        if (hb && hb.logs) {
-                            let logsArr = Array.isArray(hb.logs) ? hb.logs : [hb.logs];
-                            let feedbackText = "";
-
-                            for (let i = 0; i < logsArr.length; i++) {
-                                let logStr = typeof logsArr[i] === 'object' ? JSON.stringify(logsArr[i]) : String(logsArr[i]).toUpperCase();
-                                if (logStr.includes(`"PASSWORDATTEMPTED":"${guess}"`) || logStr.includes(`PASSWORDATTEMPTED: ${guess}`) || logStr.includes(`PASSWORDATTEMPTED: ${mid}`)) {
-                                    feedbackText = logStr;
-                                    break;
-                                }
-                            }
-
+                        let feedbackText = await getLogEntry(guess);
+                        if (feedbackText) {
+                            feedbackText = feedbackText.toUpperCase();
                             if (feedbackText.includes("PARUM")) {
                                 low = mid + 1;
                             } else if (feedbackText.includes("NIMIS") || feedbackText.includes("LONGUS") || feedbackText.includes("MAGNUS") || feedbackText.includes("ALTA")) {
@@ -561,7 +589,7 @@ async function executeCrackingMatrix(ns, hostname, details) {
             let blareMatch = details.passwordHint.match(/\d+/);
             return blareMatch ? { success: (await ns.dnet.authenticate(hostname, blareMatch[0])).success, password: blareMatch[0] } : { success: false };
 
-        case "RateMyPix.Auth":
+        case "RateMyPix.Auth": {
             let rpmLen = details.passwordLength || 5;
             let currentPin = Array(rpmLen).fill('0');
 
@@ -569,48 +597,34 @@ async function executeCrackingMatrix(ns, hostname, details) {
                 ? "0123456789"
                 : "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ!@#$%^&*()_+-=[]{}|;':,./<>?";
 
-            await ns.dnet.authenticate(hostname, currentPin.join(''));
-            await ns.sleep(40);
-            let hbInit = await ns.dnet.heartbleed(hostname, { peek: true });
-            let lastScore = 0;
-            if (hbInit && hbInit.logs) {
-                let logStr = Array.isArray(hbInit.logs) ? JSON.stringify(hbInit.logs) : String(hbInit.logs);
-                let m = logStr.match(/"data"\s*:\s*"([^"]+)\/\d+"/) || logStr.match(/([^"{\s]+)\/\d+/);
+            const parseChiliScore = (logStr) => {
+                let m = logStr.match(/"data"\s*:\s*"([^"]+)\/\d+"/) || logStr.match(/data:\s*([^"{\s]+)\/\d+/);
                 if (m) {
                     let val = m[1].trim();
-                    lastScore = /^\d+$/.test(val) ? parseInt(val, 10) : Array.from(val).length;
+                    return /^\d+$/.test(val) ? parseInt(val, 10) : Array.from(val).length;
                 }
-            }
+                return null;
+            };
+
+            let initialGuess = currentPin.join('');
+            await ns.dnet.authenticate(hostname, initialGuess);
+            let logInit = await getLogEntry(initialGuess);
+            let lastScore = logInit ? parseChiliScore(logInit) || 0 : 0;
 
             for (let pos = 0; pos < rpmLen; pos++) {
                 let originalChar = currentPin[pos];
                 let locked = false;
 
-                for (let cIdx = 0; cIdx < alphaNumericPool.length; cIdx++) {
-                    let char = alphaNumericPool[cIdx];
+                for (let char of alphaNumericPool) {
+                    if (char === originalChar && pos > 0) continue;
                     currentPin[pos] = char;
                     let guess = currentPin.join('');
 
                     if ((await ns.dnet.authenticate(hostname, guess)).success) return { success: true, password: guess };
-                    await ns.sleep(40);
 
-                    let hb = await ns.dnet.heartbleed(hostname, { peek: true });
-                    if (hb && hb.logs) {
-                        let logsArr = Array.isArray(hb.logs) ? hb.logs : [hb.logs];
-                        let newScore = null;
-
-                        for (let i = 0; i < logsArr.length; i++) {
-                            let logStr = typeof logsArr[i] === 'object' ? JSON.stringify(logsArr[i]) : String(logsArr[i]);
-                            if (logStr.includes(`"passwordAttempted":"${guess}"`) || logStr.includes(`passwordAttempted: ${guess}`)) {
-                                let m = logStr.match(/"data"\s*:\s*"([^"]+)\/\d+"/) || logStr.match(/([^"{\s]+)\/\d+/);
-                                if (m) {
-                                    let val = m[1].trim();
-                                    newScore = /^\d+$/.test(val) ? parseInt(val, 10) : Array.from(val).length;
-                                    break;
-                                }
-                            }
-                        }
-
+                    let logStr = await getLogEntry(guess);
+                    if (logStr) {
+                        let newScore = parseChiliScore(logStr);
                         if (newScore !== null) {
                             if (newScore > lastScore) {
                                 lastScore = newScore;
@@ -627,19 +641,19 @@ async function executeCrackingMatrix(ns, hostname, details) {
                 if (!locked) currentPin[pos] = originalChar;
             }
             return { success: (await ns.dnet.authenticate(hostname, currentPin.join(''))).success, password: currentPin.join('') };
+        }
 
         case "Factori-Os": {
             let fLength = details.passwordLength || 2;
             if (details.passwordFormat !== "numeric") return { success: false };
 
             let maxVal = Math.pow(10, fLength) - 1;
-            await ns.dnet.authenticate(hostname, "0".repeat(fLength));
-            await ns.sleep(40);
+            const startGuess = "0".repeat(fLength);
+            await ns.dnet.authenticate(hostname, startGuess);
 
-            let fHb = await ns.dnet.heartbleed(hostname, { peek: true });
             let divisors = [], nonDivisors = [];
-            if (fHb && fHb.logs) {
-                let fLogStr = Array.isArray(fHb.logs) ? JSON.stringify(fHb.logs) : String(fHb.logs);
+            let fLogStr = await getLogEntry(startGuess);
+            if (fLogStr) {
                 let incMatches = [...fLogStr.matchAll(/IS divisible by '(\d+)'/gi)];
                 divisors = incMatches.map(m => parseInt(m[1], 10)).filter(d => d > 0);
                 let excMatches = [...fLogStr.matchAll(/is not divisible by '(\d+)'/gi)];
@@ -671,14 +685,10 @@ async function executeCrackingMatrix(ns, hostname, details) {
                     return { success: true, password: guessStr, altitude: Infinity };
                 }
 
-                await ns.sleep(40);
-                let hb = await ns.dnet.heartbleed(hostname, { peek: true });
                 let altitude = 0;
-
-                if (hb && hb.logs) {
-                    let logStr = Array.isArray(hb.logs) ? JSON.stringify(hb.logs) : String(hb.logs);
+                let logStr = await getLogEntry(guessStr);
+                if (logStr) {
                     logStr = logStr.replace(/\\/g, '');
-
                     let match = logStr.match(/current altitude:\s*(\d+(?:\.\d+)?)/i) ||
                         logStr.match(/data:\s*(\d+(?:\.\d+)?)/i);
 
@@ -788,26 +798,35 @@ async function executeCrackingMatrix(ns, hostname, details) {
             for (let char of pool) {
                 if (discoveredPassword.every(c => c !== null)) break;
 
-                await ns.dnet.authenticate(hostname, char.repeat(nLen));
-                await ns.sleep(40); 
+                let guess = char.repeat(nLen);
+                await ns.dnet.authenticate(hostname, guess);
 
-                let h = await ns.dnet.heartbleed(hostname, { peek: true });
-                if (h && h.logs) {
-                    let logsArr = Array.isArray(h.logs) ? h.logs : [h.logs];
-                    for (let entry of logsArr) {
-                        let entryStr = typeof entry === 'object' ? JSON.stringify(entry) : String(entry);
-                        entryStr = entryStr.replace(/\\/g, '');
-
-                        if (entryStr.includes(`"passwordAttempted":"${char.repeat(nLen)}"`) || entryStr.includes(`passwordAttempted: ${char.repeat(nLen)}`)) {
-                            let dataMatch = entryStr.match(/"data"\s*:\s*"([^"]+)"/) || entryStr.match(/data:\s*([^\s,]+(?:,[^\s,]+)*)/);
-                            if (dataMatch) {
-                                let feedbackArray = dataMatch[1].split(',');
-                                for (let i = 0; i < nLen; i++) {
-                                    if (feedbackArray[i] === "yes") {
-                                        discoveredPassword[i] = char; 
-                                    }
+                let feedbackStr = null;
+                for (let retry = 0; retry < 15; retry++) {
+                    let h = await ns.dnet.heartbleed(hostname, { peek: true });
+                    if (h && h.logs) {
+                        let logsArr = Array.isArray(h.logs) ? h.logs : [h.logs];
+                        for (let entry of logsArr) {
+                            let entryStr = typeof entry === 'object' ? JSON.stringify(entry) : String(entry);
+                            entryStr = entryStr.replace(/\\/g, '');
+                            if (entryStr.includes(`"${guess}"`) || entryStr.includes(`: ${guess}`)) {
+                                let dataMatch = entryStr.match(/"data"\s*:\s*"([^"]+)"/) || entryStr.match(/data:\s*([^\s,]+(?:,[^\s,]+)*)/);
+                                if (dataMatch) {
+                                    feedbackStr = dataMatch[1];
+                                    break;
                                 }
                             }
+                        }
+                    }
+                    if (feedbackStr) break;
+                    await ns.sleep(40);
+                }
+
+                if (feedbackStr) {
+                    let feedbackArray = feedbackStr.split(',');
+                    for (let i = 0; i < nLen; i++) {
+                        if (feedbackArray[i] === "yes") {
+                            discoveredPassword[i] = char;
                         }
                     }
                 }
@@ -824,6 +843,7 @@ async function executeCrackingMatrix(ns, hostname, details) {
             const visitedNodes = new Map();
             let trailStack = [];
             let junctionStack = [];
+            let lastAttemptedDir = null;
 
             try {
                 let checkHb = await ns.dnet.heartbleed(hostname, { peek: true });
@@ -847,6 +867,7 @@ async function executeCrackingMatrix(ns, hostname, details) {
                         if (fileContent) {
                             let parsedData = JSON.parse(fileContent);
                             junctionStack = parsedData.junctionStack || [];
+                            trailStack = parsedData.trailStack || [];
                             if (parsedData.visitedNodes) {
                                 for (let [coords, nodeData] of Object.entries(parsedData.visitedNodes)) {
                                     visitedNodes.set(coords, nodeData);
@@ -863,6 +884,7 @@ async function executeCrackingMatrix(ns, hostname, details) {
                 try {
                     let payload = {
                         junctionStack: junctionStack,
+                        trailStack: trailStack,
                         visitedNodes: Object.fromEntries(visitedNodes)
                     };
                     ns.write(saveFile, JSON.stringify(payload), "w");
@@ -918,8 +940,18 @@ async function executeCrackingMatrix(ns, hostname, details) {
                 let curCoordStr = `${curX},${curY}`;
 
                 if (rawData.includes("Not a valid move") || rawData.includes("wall")) {
-                    ns.tryWritePort(14, `[MAZE-WALL] Collision detected at ${curCoordStr}. Wiping direction vector cache.`);
-                    if (trailStack.length > 0) trailStack.pop();
+                    ns.tryWritePort(14, `[MAZE-WALL] Collision detected at ${curCoordStr} while moving ${lastAttemptedDir}.`);
+                    if (trailStack.length > 0 && trailStack[trailStack.length - 1].dir === lastAttemptedDir) {
+                        trailStack.pop();
+                    }
+                    // Mark the wall in our map
+                    if (visitedNodes.has(curCoordStr)) {
+                        let node = visitedNodes.get(curCoordStr);
+                        node.availableDirs = node.availableDirs.filter(d => d !== lastAttemptedDir);
+                        node.allOpenDirs = node.allOpenDirs.filter(d => d !== lastAttemptedDir);
+                        syncMazeToHome();
+                    }
+                    lastAttemptedDir = null;
                 }
 
                 if (!visitedNodes.has(curCoordStr)) {
@@ -957,9 +989,10 @@ async function executeCrackingMatrix(ns, hostname, details) {
 
                 if (node.availableDirs.length > 0) {
                     let nextDir = node.availableDirs.shift();
+                    lastAttemptedDir = nextDir;
                     trailStack.push({ coord: curCoordStr, dir: nextDir });
                     syncMazeToHome();
-                    await ns.dnet.authenticate(hostname, `go ${nextDir}`);
+                    await ns.dnet.authenticate(hostname, nextDir);
                 } else {
                     if (trailStack.length > 0) {
                         let lastStep = trailStack.pop();
@@ -1024,12 +1057,12 @@ async function executeCrackingMatrix(ns, hostname, details) {
             return { success: false };
         }
 
-        case "Pr0verFl0":
+        case "Pr0verFl0": {
             let pLength = details.passwordLength || 7;
-            await ns.dnet.authenticate(hostname, "A".repeat(pLength));
-            let pHb = await ns.dnet.heartbleed(hostname, { peek: true });
-            if (pHb && pHb.logs) {
-                let pLogStr = Array.isArray(pHb.logs) ? JSON.stringify(pHb.logs) : String(pHb.logs);
+            const pGuess = "A".repeat(pLength);
+            await ns.dnet.authenticate(hostname, pGuess);
+            let pLogStr = await getLogEntry(pGuess);
+            if (pLogStr) {
                 pLogStr = pLogStr.replace(/\\/g, '');
                 let prefixMatch = pLogStr.match(/expected '([^\\u25a0']+)/i) || pLogStr.match(/passwordExpected:\s*([^\\u25a0\s]+)/i);
                 let knownPrefix = prefixMatch ? prefixMatch[1] : "";
@@ -1059,15 +1092,9 @@ async function executeCrackingMatrix(ns, hostname, details) {
                 let authRes = await ns.dnet.authenticate(hostname, seed);
                 if (authRes.success) return { success: true, password: seed };
 
-                await ns.sleep(40);
-
-                let hStream = await ns.dnet.heartbleed(hostname, { peek: true });
-                if (hStream && hStream.logs) {
-                    let logsArr = Array.isArray(hStream.logs) ? hStream.logs : [hStream.logs];
-
-                    for (let logEntry of logsArr) {
-                        let logStr = typeof logEntry === 'object' ? JSON.stringify(logEntry) : String(logEntry);
-                        let dataMatch = logStr.match(/"data"\s*:\s*"([^"]+)"/);
+                let logStr = await getLogEntry(seed);
+                if (logStr) {
+                    let dataMatch = logStr.match(/"data"\s*:\s*"([^"]+)"/);
 
                         if (dataMatch) {
                             let rawDataStr = dataMatch[1];
@@ -1199,20 +1226,17 @@ async function executeCrackingMatrix(ns, hostname, details) {
                 mastermindRuns++;
                 const res = await ns.dnet.authenticate(hostname, currentGuess);
                 if (res.success) return { success: true, password: currentGuess };
-                let targetExact = null, targetWrong = null, lStr = "", guesses = 0;
-                while (guesses < 15) {
-                    await ns.sleep(40);
-                    let h = await ns.dnet.heartbleed(hostname, { peek: true });
-                    lStr = Array.isArray(h?.logs) ? JSON.stringify(h.logs) : String(h?.logs || "");
+
+                let targetExact = null, targetWrong = null;
+                let lStr = await getLogEntry(currentGuess);
+                if (lStr) {
                     lStr = lStr.replace(/\\/g, "");
-                    if (lStr.includes(`"passwordAttempted":"${currentGuess}"`) || lStr.includes(`passwordAttempted: ${currentGuess}`)) break;
-                    guesses++;
-                }
-                let dMatch = lStr.match(/"data"\s*:\s*"(\d+),(\d+)"/) || lStr.match(/data:\s*(\d+),(\d+)/);
-                if (dMatch) {
-                    targetExact = parseInt(dMatch[1], 10);
-                    targetWrong = parseInt(dMatch[2], 10);
-                    clues.push({ guess: currentGuess, exact: targetExact, wrong: targetWrong });
+                    let dMatch = lStr.match(/"data"\s*:\s*"(\d+),(\d+)"/) || lStr.match(/data:\s*(\d+),(\d+)/);
+                    if (dMatch) {
+                        targetExact = parseInt(dMatch[1], 10);
+                        targetWrong = parseInt(dMatch[2], 10);
+                        clues.push({ guess: currentGuess, exact: targetExact, wrong: targetWrong });
+                    }
                 }
                 yieldCounter = 0;
                 let nextCand = await findNextCandidate("");
@@ -1280,14 +1304,20 @@ async function executeCrackingMatrix(ns, hostname, details) {
             }
             return { success: false };
 
-        case "110100100":
+        case "110100100": {
             let binarySource = details.data || "";
             if (!binarySource) {
                 let hb = await ns.dnet.heartbleed(hostname, { peek: true });
                 if (hb && hb.logs) {
-                    let logStr = Array.isArray(hb.logs) ? JSON.stringify(hb.logs) : String(hb.logs);
-                    let m = logStr.match(/"data"\s*:\s*"([^"]+)"/) || logStr.match(/data:\s*([01\s]+)/);
-                    if (m) binarySource = m[1];
+                    let logsArr = Array.isArray(hb.logs) ? hb.logs : [hb.logs];
+                    for (let entry of logsArr) {
+                        let logStr = typeof entry === 'object' ? JSON.stringify(entry) : String(entry);
+                        let m = logStr.match(/"data"\s*:\s*"([^"]+)"/) || logStr.match(/data:\s*([01\s]+)/);
+                        if (m) {
+                            binarySource = m[1];
+                            break;
+                        }
+                    }
                 }
             }
             if (binarySource && binarySource.includes(" ")) {
@@ -1411,29 +1441,19 @@ async function executeCrackingMatrix(ns, hostname, details) {
                 let authRes = await ns.dnet.authenticate(hostname, pStr);
                 if (authRes.success) return { success: true, password: pStr };
 
-                await ns.sleep(40);
-                let hb = await ns.dnet.heartbleed(hostname, { peek: true });
-                if (hb && hb.logs) {
-                    let logsArr = Array.isArray(hb.logs) ? hb.logs : [hb.logs];
-                    let foundRem = null;
-
-                    for (let i = logsArr.length - 1; i >= 0; i--) {
-                        let logStr = typeof logsArr[i] === 'object' ? JSON.stringify(logsArr[i]) : String(logsArr[i]);
-                        logStr = logStr.replace(/\\/g, '');
-
-                        if (logStr.includes(`"passwordAttempted":"${pStr}"`) || logStr.includes(`passwordAttempted: ${pStr}`) || logStr.includes(`passwordAttempted: ${p}`)) {
-                            let m = logStr.match(/"data"\s*:\s*"(\d+)"/) || logStr.match(/"data"\s*:\s*(\d+)/) || logStr.match(/data:\s*(\d+)/);
-                            if (m) {
-                                foundRem = parseInt(m[1], 10);
-                                break;
-                            }
-                        }
+                let foundRem = null;
+                let logStr = await getLogEntry(pStr);
+                if (logStr) {
+                    logStr = logStr.replace(/\\/g, '');
+                    let m = logStr.match(/"data"\s*:\s*"(\d+)"/) || logStr.match(/"data"\s*:\s*(\d+)/) || logStr.match(/data:\s*(\d+)/);
+                    if (m) {
+                        foundRem = parseInt(m[1], 10);
                     }
+                }
 
-                    if (foundRem !== null) {
-                        moduli.push(BigInt(p));
-                        remainders.push(BigInt(foundRem));
-                    }
+                if (foundRem !== null) {
+                    moduli.push(BigInt(p));
+                    remainders.push(BigInt(foundRem));
                 }
             }
 
@@ -1475,35 +1495,19 @@ async function executeCrackingMatrix(ns, hostname, details) {
             let cellGuess = Array(cellLen).fill(cellPool[0]);
 
             for (let pos = 0; pos < cellLen; pos++) {
-                for (let cIdx = 0; cIdx < cellPool.length; cIdx++) {
-                    cellGuess[pos] = cellPool[cIdx];
+                for (let char of cellPool) {
+                    cellGuess[pos] = char;
                     let guessStr = cellGuess.join('');
 
                     if ((await ns.dnet.authenticate(hostname, guessStr)).success) return { success: true, password: guessStr };
 
                     let mismatchIdx = null;
-                    let guesses = 0;
-                    while (guesses < 15) {
-                        await ns.sleep(40);
-                        let hb = await ns.dnet.heartbleed(hostname, { peek: true });
-                        if (hb && hb.logs) {
-                            let logsArr = Array.isArray(hb.logs) ? hb.logs : [hb.logs];
-                            let logFound = false;
-
-                            for (let i = 0; i < logsArr.length; i++) {
-                                let logStr = typeof logsArr[i] === 'object' ? JSON.stringify(logsArr[i]) : String(logsArr[i]);
-                                if (logStr.includes(`"passwordAttempted":"${guessStr}"`) || logStr.includes(`passwordAttempted: ${guessStr}`)) {
-                                    logFound = true;
-                                    let match = logStr.match(/checking each character \((\d+)\)/i);
-                                    if (match) {
-                                        mismatchIdx = parseInt(match[1], 10);
-                                        break;
-                                    }
-                                }
-                            }
-                            if (logFound) break;
+                    let logStr = await getLogEntry(guessStr);
+                    if (logStr) {
+                        let match = logStr.match(/checking each character \((\d+)\)/i);
+                        if (match) {
+                            mismatchIdx = parseInt(match[1], 10);
                         }
-                        guesses++;
                     }
 
                     if (mismatchIdx !== null && mismatchIdx > pos) {
