@@ -412,7 +412,23 @@ async function crackingMatrix(ns, hostname, details, logDiag, logSuccess) {
         }
 
         case "TopPass": {
-            const dict = ["password", "123456", "12345678", "qwerty", "admin", "welcome", "login", "secret"];
+            const passDict = {
+                4: ["1234", "0000", "1111", "9999", "qwer", "test", "love", "root", "admin", "pass"],
+                5: ["12345", "00000", "11111", "99999", "login", "admin", "hello", "cyber"],
+                6: [
+                    "123456", "654321", "112233", "123123", "987654", "121212", "012345",
+                    "696969", "666666", "123321", "967609", "555555", "131313", "777777",
+                    "qwerty", "secret", "dragon", "master", "system", "qazwsx", "123qwe",
+                    "jordan", "pepper", "zxcvbn", "maggie", "159753", "aaaaaa", "ginger",
+                    "buster", "asdfgh", "hunter", "430165", "abc123", "monkey", "shadow"
+                ],
+                7: ["letmein", "7777777", "zxcvbnm", "1234567", "mustang", "jessica", "freedom"],
+                8: ["baseball", "football", "12345678", "superman", "1qaz2wsx", "trustno1", "jennifer", "44215175", "michelle", "11111111"],
+                9: ["123456789"],
+                10: ["qwertyuiop"]
+            };
+
+            const dict = passDict[details.passwordLength] || ["password", "123456", "12345678", "qwerty", "admin", "welcome", "login", "secret"];
             if (ns.fileExists("darknet-words.txt", "home")) {
                 if (ns.scp("darknet-words.txt", hostname === currentHost ? "home" : currentHost, "home")) {
                     const words = ns.read("darknet-words.txt").split("\n");
