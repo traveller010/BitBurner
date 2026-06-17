@@ -1,4 +1,4 @@
-const WORM_VERSION = "v1.4.0";
+const WORM_VERSION = "v1.4.1";
 const WORM_COST = 13.80;
 
 /** @param {NS} ns */
@@ -30,7 +30,7 @@ export async function main(ns) {
                 logDiag("Failed to exec worm (pid 0).");
             } else {
                 ns.tryWritePort(15, `[BOOTSTRAP SUCCESS] started worm on ${targetHost}`);
-                // Notify coordination port if needed (from v1.3.75)
+                // Coordination port 18
                 ns.tryWritePort(18, targetHost);
             }
         } else {

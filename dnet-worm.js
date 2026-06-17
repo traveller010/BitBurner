@@ -1,4 +1,4 @@
-const WORM_VERSION = "v1.4.0";
+const WORM_VERSION = "v1.4.1";
 const WORM_COST = 13.80;
 const BOOTSTRAP_COST = 6.00;
 
@@ -27,11 +27,11 @@ export async function main(ns) {
     }
 
     function logSuccess(msg) {
-        ns.tryWritePort(15, `[${getTimestamp()}] [${currentHost}] ${msg}`);
+        ns.tryWritePort(15, `[${getTimestamp()}] [${currentHost}] SUCCESS: ${msg}`);
     }
 
     function logDiag(msg) {
-        ns.tryWritePort(14, `[${getTimestamp()}] [${currentHost}] ${msg}`);
+        ns.tryWritePort(14, `[${getTimestamp()}] [${currentHost}] DIAG: ${msg}`);
     }
 
     // =========================================================================
@@ -87,16 +87,6 @@ export async function main(ns) {
         } catch (e) { logDiag(`Failed to open cache ${cacheFile}: ${e}`); }
     }
 
-    // Log .txt files for manual inspection as requested
-    const txtFiles = ns.ls(currentHost, ".txt");
-    for (const txt of txtFiles) {
-        if (["darknet-keys.txt", "darknet-words.txt", "darknet-diagnostics.txt", "darknet-success.txt"].includes(txt)) continue;
-        try {
-            const content = ns.read(txt);
-            logDiag(`FILE-CONTENT [${txt}]:\n${content}`);
-        } catch (e) { logDiag(`Failed to read ${txt}: ${e}`); }
-    }
-
     // =========================================================================
     // 🔄 MAIN PROPAGATION LOOP
     // =========================================================================
@@ -148,7 +138,7 @@ export async function main(ns) {
             }
 
             const isLab = target.modelId === "(The Labyrinth)";
-            if (isLab) continue; // Labyrinth handled within solver for now
+            if (isLab) continue; // Labyrinth handled within solver
 
             // GATE 2: DEPLOYMENT / UPGRADE
             const processes = ns.ps(hostname);
@@ -193,7 +183,8 @@ export async function main(ns) {
             } catch (e) { logDiag(`Failed to exec on ${hostname}: ${e}`); }
         }
 
-        // Optional tasks
+        // Commented out to reduce RAM below 16GB
+        /*
         if (currentHost !== "home" && currentHost !== "darkweb") {
             try { await ns.dnet.phishingAttack(); } catch (e) {}
             let whale = ns.peek(16);
@@ -201,6 +192,7 @@ export async function main(ns) {
                 try { await ns.dnet.promoteStock(whale); } catch (e) {}
             }
         }
+        */
 
         await ns.sleep(5000);
     }
@@ -258,7 +250,7 @@ async function serverSolver(ns, hostname, logDiag, logSuccess) {
 async function crackingMatrix(ns, hostname, details, logDiag, logSuccess) {
     const model = details.modelId;
 
-    // Helper for RateMyPix and others that need repeated Heartbleed checks
+    // Helper for Heartbleed checks
     const getLogEntry = async (guess) => {
         for (let i = 0; i < 15; i++) {
             await ns.sleep(40);
@@ -327,17 +319,37 @@ async function crackingMatrix(ns, hostname, details, logDiag, logSuccess) {
 
         case "RateMyPix.Auth": {
             const len = details.passwordLength || 5;
-            const pool = details.passwordFormat === "numeric" ? "0123456789" : "0123456789abcdefghijklmnopqrstuvwxyz";
+            const format = details.passwordFormat || "numeric";
+            let pool = "0123456789";
+            if (format === "alphanumeric") pool = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+            else if (format === "alphabetic") pool = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+
             let current = Array(len).fill(pool[0]);
 
             const getScore = async (g) => {
                 const res = await ns.dnet.authenticate(hostname, g);
                 if (res.success) return 999;
-                const entry = await getLogEntry(g);
-                if (entry) {
-                    const s = typeof entry === 'string' ? entry : JSON.stringify(entry);
-                    const m = s.match(/🌶️/g);
-                    return m ? m.length : 0;
+
+                for (let retry = 0; retry < 10; retry++) {
+                    await ns.sleep(30);
+                    const hb = await ns.dnet.heartbleed(hostname, { peek: true });
+                    if (hb && hb.logs) {
+                        const logs = Array.isArray(hb.logs) ? hb.logs : [hb.logs];
+                        const entry = logs.find(l => {
+                            const s = typeof l === 'string' ? l : JSON.stringify(l);
+                            return s.includes(g);
+                        });
+                        if (entry) {
+                            const s = typeof entry === 'string' ? entry : JSON.stringify(entry);
+                            const cleanLogStr = s.replace(/\\/g, '');
+                            const mData = cleanLogStr.match(/"data"\s*:\s*"([^"]+)"/) || cleanLogStr.match(/data:\s*([^\s]+)/);
+                            if (mData) {
+                                const feedback = mData[1];
+                                if (feedback.startsWith("0/")) return 0;
+                                return (feedback.match(/🌶️/g) || []).length;
+                            }
+                        }
+                    }
                 }
                 return -1;
             };
@@ -346,7 +358,7 @@ async function crackingMatrix(ns, hostname, details, logDiag, logSuccess) {
             if (baseScore === 999) return { success: true, password: current.join('') };
 
             for (let i = 0; i < len; i++) {
-                const orig = current[i];
+                const origChar = current[i];
                 for (let j = 1; j < pool.length; j++) {
                     current[i] = pool[j];
                     const score = await getScore(current.join(''));
@@ -355,7 +367,7 @@ async function crackingMatrix(ns, hostname, details, logDiag, logSuccess) {
                         baseScore = score;
                         break; // Locked this position
                     } else if (score < baseScore) {
-                        current[i] = orig;
+                        current[i] = origChar;
                         break;
                     }
                 }
@@ -366,33 +378,43 @@ async function crackingMatrix(ns, hostname, details, logDiag, logSuccess) {
         case "Factori-Os": {
             const len = details.passwordLength || 2;
             const max = Math.pow(10, len) - 1;
-            // Prime-based divisibility check
-            const primes = [2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47];
-            let divisors = [], nonDivisors = [];
+            const primePool = [2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47, 53, 59, 61, 67, 71, 73, 79, 83, 89, 97, 101, 103, 107, 109, 113, 127, 131, 137, 139, 149, 151, 157, 163, 167, 173, 179, 181, 191, 193, 197, 199, 211, 223, 227, 229, 233, 239, 241, 251, 257, 263, 269, 271, 277, 281, 283, 293, 307, 311, 313, 317, 331, 337, 347, 349, 353, 359, 367, 373, 379, 383, 389, 397, 401, 409, 419, 421, 431, 433, 439, 443, 449, 457, 461, 463, 467, 479, 487, 491, 499, 503, 509, 521, 523, 541];
 
-            const check = async (n) => {
+            const checkDivisibility = async (n) => {
                 const g = n.toString().padStart(len, '0');
                 if ((await ns.dnet.authenticate(hostname, g)).success) return "WIN";
+                await ns.sleep(30);
                 const entry = await getLogEntry(g);
                 if (entry) {
                     const s = typeof entry === 'string' ? entry : JSON.stringify(entry);
-                    return s.includes("IS divisible");
+                    return s.includes("IS divisible") || s.includes('"data":true') || s.includes('data: true');
                 }
-                return null;
+                return false;
             };
 
-            for (const p of primes) {
-                if (p > max) break;
-                const res = await check(p);
-                if (res === "WIN") return { success: true, password: p.toString().padStart(len, '0') };
-                if (res === true) divisors.push(p);
-                else if (res === false) nonDivisors.push(p);
+            let knownProduct = 1;
+            for (const p of primePool) {
+                if (p > max || knownProduct * p > max) break;
+                let power = 1;
+                while (true) {
+                    const testVal = Math.pow(p, power);
+                    if (testVal > max) break;
+                    const res = await checkDivisibility(testVal);
+                    if (res === "WIN") return { success: true, password: testVal.toString().padStart(len, '0') };
+                    if (res === true) power++;
+                    else break;
+                }
+                if (power > 1) {
+                    knownProduct *= Math.pow(p, power - 1);
+                    const finalStr = knownProduct.toString().padStart(len, '0');
+                    if ((await ns.dnet.authenticate(hostname, finalStr)).success) return { success: true, password: finalStr };
+                }
             }
-
-            for (let i = 1; i <= max; i++) {
-                if (divisors.every(d => i % d === 0) && nonDivisors.every(d => i % d !== 0)) {
-                    if ((await ns.dnet.authenticate(hostname, i.toString().padStart(len, '0'))).success)
-                        return { success: true, password: i.toString().padStart(len, '0') };
+            // Fallback brute
+            for (let i = 0; i <= max; i++) {
+                if (i % knownProduct === 0) {
+                    const g = i.toString().padStart(len, '0');
+                    if ((await ns.dnet.authenticate(hostname, g)).success) return { success: true, password: g };
                 }
             }
             return { success: false };
@@ -413,36 +435,26 @@ async function crackingMatrix(ns, hostname, details, logDiag, logSuccess) {
 
         case "TopPass": {
             const passDict = {
-                4: ["1234", "0000", "1111", "9999", "qwer", "test", "love", "root", "admin", "pass"],
-                5: ["12345", "00000", "11111", "99999", "login", "admin", "hello", "cyber"],
-                6: [
-                    "123456", "654321", "112233", "123123", "987654", "121212", "012345",
-                    "696969", "666666", "123321", "967609", "555555", "131313", "777777",
-                    "qwerty", "secret", "dragon", "master", "system", "qazwsx", "123qwe",
-                    "jordan", "pepper", "zxcvbn", "maggie", "159753", "aaaaaa", "ginger",
-                    "buster", "asdfgh", "hunter", "430165", "abc123", "monkey", "shadow"
-                ],
-                7: ["letmein", "7777777", "zxcvbnm", "1234567", "mustang", "jessica", "freedom"],
-                8: ["baseball", "football", "12345678", "superman", "1qaz2wsx", "trustno1", "jennifer", "44215175", "michelle", "11111111"],
-                9: ["123456789"],
-                10: ["qwertyuiop"]
+                3: ["123", "abc", "god", "cat", "dog", "sex", "win", "pop", "sam", "tom", "fox", "ace"],
+                4: ["1234", "qwer", "test", "love", "baby", "rock", "star", "king", "pass", "cool", "root", "l33t", "wolf", "lion", "zero", "link"],
+                5: ["12345", "login", "admin", "hello", "trust", "enter", "ninja", "tiger", "angel", "jesus", "money", "black", "white", "smart", "cyber", "linux", "apple"],
+                6: ["123456", "654321", "112233", "123123", "987654", "121212", "012345", "696969", "666666", "123321", "967609", "555555", "131313", "777777", "qwerty", "secret", "dragon", "master", "system", "qazwsx", "123qwe", "jordan", "pepper", "zxcvbn", "maggie", "159753", "aaaaaa", "ginger", "buster", "asdfgh", "hunter", "430165", "abc123", "monkey", "shadow"],
+                7: ["1234567", "welcome", "network", "connect", "warrior", "phoenix", "hacking", "gateway", "computer", "sunshine", "letmein", "pokemon", "freedom", "batman", "mustard", "forever", "perfect", "justice", "destiny", "phantom", "crystal", "digital", "unknown", "offline", "account", "startup"],
+                8: ["12345678", "password", "iloveyou", "princess", "baseball", "football", "superman", "starwars", "internet", "security", "terminal", "database", "critical", "software", "download", "firewall", "override", "loopback", "infinite", "absolute", "1qaz2wsx", "trustno1", "jennifer", "44215175", "michelle", "11111111"],
+                9: ["123456789", "character", "anonymous", "dangerous", "interface", "mainframe", "algorithm", "developer", "encrypted", "masterkey", "processor"],
+                10: ["1234567890", "letmeingin", "cyberpunk2", "properties", "production", "background", "everything", "collection", "management", "experience"]
             };
 
-            const dict = passDict[details.passwordLength] || ["password", "123456", "12345678", "qwerty", "admin", "welcome", "login", "secret"];
+            const dict = [...(passDict[details.passwordLength] || [])];
             if (ns.fileExists("darknet-words.txt", "home")) {
-                if (ns.scp("darknet-words.txt", hostname === currentHost ? "home" : currentHost, "home")) {
+                if (ns.scp("darknet-words.txt", currentHost, "home")) {
                     const words = ns.read("darknet-words.txt").split("\n");
-                    for (const w of words) if (w.trim()) dict.push(w.trim());
+                    for (const w of words) if (w.trim().length === details.passwordLength) dict.push(w.trim());
                 }
             }
-            const len = details.passwordLength;
-            const unique = Array.from(new Set(dict)).filter(w => w.length === len);
+            const unique = Array.from(new Set(dict));
             for (const g of unique) {
                 if ((await ns.dnet.authenticate(hostname, g)).success) return { success: true, password: g };
-                const variants = [g.toUpperCase(), g.toLowerCase(), g.charAt(0).toUpperCase() + g.slice(1).toLowerCase()];
-                for (const v of variants) {
-                    if (v.length === len && (await ns.dnet.authenticate(hostname, v)).success) return { success: true, password: v };
-                }
             }
             return { success: false };
         }
@@ -560,7 +572,7 @@ async function crackingMatrix(ns, hostname, details, logDiag, logSuccess) {
                 if ((await ns.dnet.authenticate(hostname, g)).success) return { success: true, password: g };
                 const entry = await getLogEntry(g);
                 if (entry) {
-                    const s = typeof entry === 'string' ? entry : JSON.stringify(entry);
+                    const s = (typeof entry === 'string' ? entry : JSON.stringify(entry)).replace(/\\/g, '');
                     const m = s.match(/"data"\s*:\s*"([^"]+)"/) || s.match(/data:\s*([^\s,]+(?:,[^\s,]+)*)/);
                     if (m) {
                         let feedback = m[1].split(",");
@@ -655,11 +667,10 @@ async function crackingMatrix(ns, hostname, details, logDiag, logSuccess) {
                 if ((await ns.dnet.authenticate(hostname, curr)).success) return { success: true, password: curr };
                 const entry = await getLogEntry(curr);
                 if (entry) {
-                    const s = typeof entry === 'string' ? entry : JSON.stringify(entry);
+                    const s = (typeof entry === 'string' ? entry : JSON.stringify(entry)).replace(/\\/g, '');
                     const m = s.match(/"data"\s*:\s*"(\d+),(\d+)"/) || s.match(/data:\s*(\d+),(\d+)/);
                     if (m) {
                         clues.push({ g: curr, e: parseInt(m[1]), w: parseInt(m[2]) });
-                        // Find next candidate (very simplified, would need a real generator for large pools)
                         if (len <= 4) {
                             let found = false;
                             for (let i = 0; i < Math.pow(pool.length, len); i++) {
@@ -715,7 +726,10 @@ async function crackingMatrix(ns, hostname, details, logDiag, logSuccess) {
             let bin = details.data || "";
             if (!bin) {
                 let hb = await ns.dnet.heartbleed(hostname, { peek: true });
-                if (hb && hb.logs) bin = (JSON.stringify(hb.logs).match(/"data"\s*:\s*"([^"]+)"/) || [])[1] || "";
+                if (hb && hb.logs) {
+                    const logStr = JSON.stringify(hb.logs);
+                    bin = (logStr.match(/"data"\s*:\s*"([^"]+)"/) || [])[1] || "";
+                }
             }
             if (bin && bin.includes(" ")) {
                 let res = bin.split(" ").map(b => String.fromCharCode(parseInt(b, 2))).join("");
@@ -731,7 +745,7 @@ async function crackingMatrix(ns, hostname, details, logDiag, logSuccess) {
                 if ((await ns.dnet.authenticate(hostname, p.toString())).success) return { success: true, password: p.toString() };
                 let entry = await getLogEntry(p.toString());
                 if (entry) {
-                    let s = typeof entry === 'string' ? entry : JSON.stringify(entry);
+                    let s = (typeof entry === 'string' ? entry : JSON.stringify(entry)).replace(/\\/g, '');
                     let m = s.match(/"data"\s*:\s*"(\d+)"/) || s.match(/data:\s*(\d+)/) || s.match(/=\s*(\d+)/);
                     if (m) { mods.push(BigInt(p)); rems.push(BigInt(m[1])); }
                 }
@@ -780,15 +794,7 @@ async function crackingMatrix(ns, hostname, details, logDiag, logSuccess) {
                         const evalRes = Function(`return (${cleanExpr})`)();
                         let targetLen = details.passwordLength || 2;
                         let resStr = evalRes.toString();
-
-                        if (resStr.length > targetLen) {
-                            resStr = resStr.slice(0, targetLen);
-                        } else if (resStr.length < targetLen && resStr.includes('.')) {
-                            resStr = evalRes.toFixed(targetLen - resStr.indexOf('.') - 1);
-                        } else if (resStr.length < targetLen) {
-                            resStr = resStr.padEnd(targetLen, '0');
-                        }
-
+                        if (resStr.length > targetLen) resStr = resStr.slice(0, targetLen);
                         if ((await ns.dnet.authenticate(hostname, resStr)).success) return { success: true, password: resStr };
                     }
                 } catch (e) { logDiag(`MathML error: ${e}`); }
@@ -810,36 +816,48 @@ async function crackingMatrix(ns, hostname, details, logDiag, logSuccess) {
 
 /** @param {NS} ns */
 async function solveLabyrinth(ns, hostname, logDiag, logSuccess) {
-    const saveFile = `maze-grid-${hostname}.txt`;
+    const saveFile = `maze-${hostname}.txt`;
     const home = "home";
-    let grid = {};
+    const currentHost = ns.getHostname();
+    let state = {
+        grid: {},
+        moveStack: [],
+        visited: []
+    };
 
     const syncLoad = () => {
         if (ns.fileExists(saveFile, home)) {
-            if (ns.scp(saveFile, ns.getHostname(), home)) {
-                try {
-                    const data = JSON.parse(ns.read(saveFile));
-                    grid = Object.assign(grid, data);
-                } catch (e) {}
-            }
+            if (currentHost !== home) ns.scp(saveFile, currentHost, home);
+            try {
+                const data = JSON.parse(ns.read(saveFile));
+                state = Object.assign(state, data);
+            } catch (e) {}
         }
     };
 
     const syncSave = () => {
         try {
-            ns.write(saveFile, JSON.stringify(grid), "w");
-            if (ns.getHostname() !== home) ns.scp(saveFile, home);
+            ns.write(saveFile, JSON.stringify(state), "w");
+            if (currentHost !== home) ns.scp(saveFile, home, currentHost);
         } catch (e) {}
     };
 
     syncLoad();
     const opposites = { north: "south", south: "north", east: "west", west: "east" };
 
+    // Connection starts at [1,1]. Re-trace stack.
+    if (state.moveStack.length > 0) {
+        logDiag(`Re-tracing ${state.moveStack.length} steps in Labyrinth...`);
+        for (const move of state.moveStack) {
+            await ns.dnet.authenticate(hostname, `go ${move}`);
+            await ns.sleep(60);
+        }
+    }
+
     while (true) {
         let report = await ns.dnet.labreport(hostname);
         if (!report || !report.coords) break;
 
-        // Check for password in heartbleed after every movement
         const hb = await ns.dnet.heartbleed(hostname, { peek: true });
         if (hb && hb.logs) {
             const logStr = JSON.stringify(hb.logs);
@@ -849,9 +867,13 @@ async function solveLabyrinth(ns, hostname, logDiag, logSuccess) {
                     const pass = m[1];
                     if ((await ns.dnet.authenticate(hostname, pass)).success) {
                         logSuccess(`LABYRINTH CONQUERED: ${hostname}`);
-                        // Immediately loot as requested
-                        const caches = ns.ls(hostname, ".cache");
-                        for (const c of caches) await ns.dnet.openCache(c);
+                        // Direct loot from current context (authenticated session)
+                        for (const c of ns.ls(hostname, '.cache')) {
+                             try {
+                                 await ns.dnet.openCache(c);
+                                 logSuccess(`Looted cache ${c} from Labyrinth ${hostname}`);
+                             } catch(e) { logDiag(`Failed to open Labyrinth cache ${c}: ${e}`); }
+                        }
                         if (ns.fileExists(saveFile, home)) ns.rm(saveFile, home);
                         return { success: true, password: pass };
                     }
@@ -860,58 +882,46 @@ async function solveLabyrinth(ns, hostname, logDiag, logSuccess) {
         }
 
         const curKey = `${report.coords[0]},${report.coords[1]}`;
-        if (!grid[curKey]) {
-            grid[curKey] = {
+        if (!state.grid[curKey]) {
+            state.grid[curKey] = {
                 n: report.north, s: report.south, e: report.east, w: report.west,
-                links: { north: null, south: null, east: null, west: null }
+                explored: { north: false, south: false, east: false, west: false }
             };
         }
 
-        const findPathToFrontier = (startKey) => {
-            let q = [[startKey, []]], visited = new Set([startKey]);
-            while (q.length > 0) {
-                let [curr, path] = q.shift();
-                let node = grid[curr];
-                if (!node) continue;
-
-                // Check if this node has unexplored directions
-                for (let d of ["north", "south", "east", "west"]) {
-                    if (node[d[0]] && node.links[d] === null) {
-                        return path.length > 0 ? path[0] : d;
-                    }
-                }
-
-                // BFS to known neighbors
-                for (let d of ["north", "south", "east", "west"]) {
-                    let next = node.links[d];
-                    if (next && !visited.has(next)) {
-                        visited.add(next);
-                        q.push([next, path.length > 0 ? path : [d]]);
-                    }
-                }
+        let move = null;
+        for (let dir of ["north", "south", "east", "west"]) {
+            if (report[dir] && !state.grid[curKey].explored[dir]) {
+                move = dir;
+                break;
             }
-            return null;
-        };
+        }
 
-        const move = findPathToFrontier(curKey);
         if (move) {
+            state.grid[curKey].explored[move] = true;
             logDiag(`Labyrinth at ${curKey}, moving ${move}`);
             await ns.dnet.authenticate(hostname, `go ${move}`);
-            await ns.sleep(200); // Wait for sliding movement to complete
+            await ns.sleep(60);
 
             const nextReport = await ns.dnet.labreport(hostname);
             if (nextReport && nextReport.coords) {
                 const nextKey = `${nextReport.coords[0]},${nextReport.coords[1]}`;
-                grid[curKey].links[move] = nextKey;
-                if (!grid[nextKey]) {
-                    grid[nextKey] = {
+                state.moveStack.push(move);
+                if (!state.grid[nextKey]) {
+                    state.grid[nextKey] = {
                         n: nextReport.north, s: nextReport.south, e: nextReport.east, w: nextReport.west,
-                        links: { north: null, south: null, east: null, west: null }
+                        explored: { north: false, south: false, east: false, west: false }
                     };
                 }
-                grid[nextKey].links[opposites[move]] = curKey;
+                state.grid[nextKey].explored[opposites[move]] = true;
                 syncSave();
             }
+        } else if (state.moveStack.length > 0) {
+            const backMove = opposites[state.moveStack.pop()];
+            logDiag(`Labyrinth at ${curKey}, backtracking ${backMove}`);
+            await ns.dnet.authenticate(hostname, `go ${backMove}`);
+            await ns.sleep(60);
+            syncSave();
         } else {
             logDiag(`Labyrinth fully explored at ${curKey}. No exit found.`);
             break;
@@ -928,7 +938,6 @@ function acquireLock(ns, hostname, model) {
     let portData = ns.readPort(port);
     let locks = (portData === "NULL PORT DATA" || portData === "NULL DATA" || !portData) ? [] : JSON.parse(portData);
 
-    // Clean stale locks (> 5 mins)
     const now = Date.now();
     locks = locks.filter(l => now - l.acquiredAt < 300000);
 
