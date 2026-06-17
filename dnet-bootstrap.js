@@ -1,23 +1,42 @@
+const WORM_VERSION = "v1.4.0";
+const WORM_COST = 13.80;
+
 /** @param {NS} ns */
 export async function main(ns) {
-    const currentHost = ns.args[1];
+    const targetHost = ns.args[1] || ns.getHostname();
     const masterWorm = "dnet-worm.js";
-    // Read the incoming version argument forwarded by the parent server pass
-    const currentVersion = ns.args[0] || "v1.0.0";
+    const version = ns.args[0] || WORM_VERSION;
+
+    function logDiag(msg) {
+        ns.tryWritePort(14, `[BOOTSTRAP] [${targetHost}] ${msg}`);
+    }
 
     try {
-        await ns.dnet.memoryReallocation();
-        await ns.sleep(100);
-
-        // Launch the master worm thread sealed with its tracking signature
-        let pid = ns.exec(masterWorm, currentHost, { threads: 1, preventDuplicates: true }, currentVersion);
-        if (pid == 0) {
-            ns.tryWritePort(14, `[BOOTSTRAP FAIL] - ${currentHost} - pid = 0`);
+        logDiag("Starting memory reallocation...");
+        let details = ns.dnet.getServerDetails(targetHost);
+        let retries = 0;
+        while (details.ramBlocked > 0 && retries < 50) {
+            await ns.dnet.memoryReallocation();
+            details = ns.dnet.getServerDetails(targetHost);
+            retries++;
+            if (details.ramBlocked > 0) await ns.sleep(100);
         }
-        else {
-            ns.tryWritePort(15, `[BOOTSTRAP SUCCESS] - started worm on ${currentHost}`);
+
+        const freeRam = ns.getServerMaxRam(targetHost) - ns.getServerUsedRam(targetHost);
+        if (freeRam >= WORM_COST) {
+            logDiag(`RAM cleared (${freeRam}GB). Launching ${masterWorm}...`);
+            let pid = ns.exec(masterWorm, targetHost, { threads: 1, preventDuplicates: true }, version);
+            if (pid === 0) {
+                logDiag("Failed to exec worm (pid 0).");
+            } else {
+                ns.tryWritePort(15, `[BOOTSTRAP SUCCESS] started worm on ${targetHost}`);
+                // Notify coordination port if needed (from v1.3.75)
+                ns.tryWritePort(18, targetHost);
+            }
+        } else {
+            logDiag(`Insufficient RAM: ${freeRam}GB free, need ${WORM_COST}GB.`);
         }
     } catch (e) {
-        ns.tryWritePort(14, `[BOOTSTRAP-EXCEPTION] - ${e}`);
+        logDiag(`Exception: ${e}`);
     }
 }
