@@ -64,6 +64,26 @@ export async function main(ns) {
     }
 
     while (true) {
+        if (currentHost === "home") {
+            let portUpdate = ns.readPort(17);
+            let vaultUpdated = false;
+            while (portUpdate !== "NULL PORT DATA" && portUpdate !== "NULL DATA" && portUpdate) {
+                try {
+                    const update = JSON.parse(portUpdate);
+                    if (update.host && update.pass) {
+                        if (globalPasswordVault[update.host] !== update.pass) {
+                            globalPasswordVault[update.host] = update.pass;
+                            vaultUpdated = true;
+                        }
+                    }
+                } catch (e) { }
+                portUpdate = ns.readPort(17);
+            }
+            if (vaultUpdated) {
+                ns.write("darknet-keys.txt", JSON.stringify(globalPasswordVault), "w");
+            }
+        }
+
         let taskFinished = ns.readPort(18);
         while (taskFinished !== "NULL PORT DATA" && taskFinished !== "NULL DATA" && taskFinished) {
             activeBootstrapTasks.delete(taskFinished);
@@ -76,7 +96,12 @@ export async function main(ns) {
             if (acquireNetworkLock(ns, hostname, details.modelId)) {
                 try {
                     const authResult = await serverSolver(ns, hostname, getTimestamp);
-                    // ... (rest of your original logic for processing authResult)
+                    if (authResult && authResult.success && authResult.password) {
+                        if (globalPasswordVault[hostname] !== authResult.password) {
+                            globalPasswordVault[hostname] = authResult.password;
+                            ns.tryWritePort(17, JSON.stringify({ host: hostname, pass: authResult.password }));
+                        }
+                    }
                 } finally {
                     releaseNetworkLock(ns, hostname);
                 }

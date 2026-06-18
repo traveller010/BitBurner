@@ -249,6 +249,7 @@ async function serverSolver(ns, hostname, logDiag, logSuccess) {
 /** @param {NS} ns */
 async function crackingMatrix(ns, hostname, details, logDiag, logSuccess) {
     const model = details.modelId;
+    const currentHost = ns.getHostname();
 
     // Helper for Heartbleed checks
     const getLogEntry = async (guess) => {
