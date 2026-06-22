@@ -1,1525 +1,1133 @@
-// Global tracking sets to prevent duplicate data flooding across log files
+const WORM_VERSION = "v1.5.22";
+const WORM_COST = 13.80;
+const dataFilesCopied = new Set();
 const reportedUnknowns = new Set();
-const reportedSpecs = new Set();
 const reportedStalls = new Set();
-const deadTopology = new Set();
+const stasisFile = "stasis-links.txt";
 const localCooldowns = new Map();
-const scriptCost = 13.80;
-const WORM_VERSION = "v1.3.17";
-
-// Global Password Vault to permanently track cracked keys across resets
 let globalPasswordVault = {};
+let stasisLinks = [];
 
 /** @param {NS} ns */
 export async function main(ns) {
     ns.disableLog("ALL");
-
     const currentHost = ns.getHostname();
     const scriptName = ns.getScriptName();
 
-    // =========================================================================
-    // \ud83d\udd01 SELF-HEALING DEPENDENCY BOOTLOADER & FILE INITIALIZATION
-    // =========================================================================
-    if (currentHost === "home") {
-        const loggerScript = "dnet-logger.js";
+    function getTimestamp() {
+        const d = new Date();
+        return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:${String(d.getSeconds()).padStart(2, '0')}:${String(d.getMilliseconds()).padStart(3, '0')}`;
+    }
 
-        if (!ns.scriptRunning(loggerScript, "home")) {
-            if (ns.fileExists(loggerScript, "home")) {
-                ns.exec(loggerScript, "home");
-            }
-        }
+    function logSuccess(msg) { ns.tryWritePort(15, `[${getTimestamp()}] [${currentHost}] [${WORM_VERSION}] SUCCESS: ${msg}`); }
+    function logDiag(msg) { ns.tryWritePort(14, `[${getTimestamp()}] [${currentHost}] [${WORM_VERSION}] DIAG: ${msg}`); }
 
-        if (ns.fileExists("darknet-keys.txt")) {
-            try {
-                const fileData = ns.read("darknet-keys.txt");
-                if (fileData) globalPasswordVault = JSON.parse(fileData);
-            } catch (e) { ns.tryWritePort(14, `[EXCEPTION1] - ${e}`) }
-        }
-    } // =========================================================================
+    getVaultPasswords(ns, currentHost, logDiag, logSuccess);
+    lootCacheFiles(ns, currentHost, logDiag, logSuccess);
+    stasisLinks = getStasisLinks(ns, logDiag);
 
     while (true) {
-        if (currentHost === "home") {
+        lootCacheFiles(ns, currentHost, logDiag, logSuccess);
+        establishStasisLink(ns, currentHost, logDiag, logSuccess);
+
+        if (currentHost == "home") {
             let portUpdate = ns.readPort(17);
             let vaultUpdated = false;
-
             while (portUpdate !== "NULL PORT DATA" && portUpdate !== "NULL DATA" && portUpdate) {
                 try {
-                    const updatePayload = JSON.parse(portUpdate);
-                    if (updatePayload.host && updatePayload.pass) {
-                        if (globalPasswordVault[updatePayload.host] !== updatePayload.pass) {
-                            globalPasswordVault[updatePayload.host] = updatePayload.pass;
-                            vaultUpdated = true;
-                        }
+                    const update = JSON.parse(portUpdate);
+                    if (update.host && update.pass) {
+                        globalPasswordVault[update.host] = update.pass;
+                        vaultUpdated = true;
                     }
-                } catch (e) { ns.tryWritePort(14, `[EXCEPTION2] - ${e}`) }
-
+                } catch (e) { }
                 portUpdate = ns.readPort(17);
             }
-
             if (vaultUpdated) {
-                ns.write("darknet-keys.txt", JSON.stringify(globalPasswordVault), "w");
+                ns.write("darknet-keys.js", JSON.stringify(globalPasswordVault), "w");
             }
-        } else {
-            try {
-                if (ns.fileExists("darknet-keys.txt", "home")) {
-                    if (ns.scp("darknet-keys.txt", currentHost, "home")) {
-                        const fileData = ns.read("darknet-keys.txt");
-                        if (fileData) {
-                            const remoteVault = JSON.parse(fileData);
-                            globalPasswordVault = Object.assign({}, remoteVault, globalPasswordVault);
-                        }
-                    }
-                }
-            } catch (e) { ns.tryWritePort(14, `[EXCEPTION3] - ${e}`) }
         }
 
-        if (currentHost !== "home" && currentHost !== "darkweb") {
-            try { 
-                let details = ns.dnet.getServerDetails(currentHost);
-                let safetyTimeout = 0;
-                while (details.ramBlocked > 0 && safetyTimeout < 30) {
-                    await ns.dnet.memoryReallocation();
-                    details = ns.dnet.getServerDetails(currentHost);
-                    safetyTimeout++;
-                    if (details.ramBlocked > 0) await ns.sleep(100);
-                }
-            } catch (e) { ns.tryWritePort(14, `[EXCEPTION4] - ${e}`) }
-        }
-
-        const cacheFiles = ns.ls(currentHost, '.cache');
-        for (const cacheFile of cacheFiles) {
-            try {
-                const result = await ns.dnet.openCache(cacheFile);
-                ns.tryWritePort(15, `[LOOT] [${currentHost}] Opened ${cacheFile}! Contents: ${JSON.stringify(result)}`);
-            } catch (e) { ns.tryWritePort(14, `[EXCEPTION5] - ${e}`) }
-        }
-
-        // =========================================================================
-        // \ud83d\udd01 SPEARHEAD DEPTH PRIORITIZATION TUNNEL
-        // =========================================================================
-        const nearbyServers = ns.dnet.probe();
-
-        const prioritizedTargets = nearbyServers.map(hostname => {
-            try {
-                const details = ns.dnet.getServerDetails(hostname);
-                return {
-                    hostname,
-                    depth: details.depth || 0,
-                    modelId: details.modelId,
-                    isHighValue: (details.modelId === "(The Labyrinth)" || details.depth > 15)
-                };
-            } catch (e) {
-                ns.tryWritePort(14, `[EXCEPTION6] - ${e}`)
-                return { hostname, depth: 0, modelId: "Unknown", isHighValue: false };
-            }
-        }).sort((a, b) => {
-            if (a.isHighValue && !b.isHighValue) return -1;
-            if (!a.isHighValue && b.isHighValue) return 1;
-            return b.depth - a.depth;
-        });
-
-        // =========================================================================
-        // \ud83d\udd01 DETERMINISTIC HARDWARE ALLOCATION ENGINE (LINEAR SECURITY REGIME)
-        // =========================================================================
-        for (const target of prioritizedTargets) {
+        const targets = getRankedNearbyServers(ns);
+        for (const target of targets) {
             const hostname = target.hostname;
-            if (hostname == null) continue;
-            const isLabyrinth = target.modelId === "(The Labyrinth)" || hostname === "ub3r_l4byr1nth";
+            const serverDetails = ns.dnet.getServerDetails(hostname);
+            if (!serverDetails.isOnline) continue;
 
-            // \ud83d\udd01 GATE 1: AUTHENTICATION & ACCESS VERIFICATION
-            const authResult = await serverSolver(ns, hostname);
-            if (!authResult || !authResult.success) continue;
-
-            // \ud83d\udd01 GATE 2: ADMINISTRATIVE AUDIT
-            try {
-                let activeProcesses = ns.ps(hostname);
-                let runningWormInstance = activeProcesses.find(p => p.filename === scriptName);
-
-                if (runningWormInstance && !isLabyrinth) {
-                    let isUpToDate = runningWormInstance.args.includes(WORM_VERSION);
-
-                    if (isUpToDate) {
-                        continue;
-                    } else {
-                        ns.tryWritePort(14, `[HOT-UPGRADE] Upgrading outdated worm on ${hostname} from ${runningWormInstance.args[0] || "Legacy"} to ${WORM_VERSION}...`);
-                        ns.kill(runningWormInstance.pid);
-                    }
-                }
-            } catch (e) {
-                ns.tryWritePort(14, `[EXCEPTION-1] Admin Audit Failure on ${hostname} - ${e}`);
-            }
-
-            // \ud83d\udd01 GATE 3: HARDWARE METRIC PROBE
-            const targetMaxRam = ns.getServerMaxRam(hostname);
-            const targetUsedRam = ns.getServerUsedRam(hostname);
-            const targetFreeRam = targetMaxRam - targetUsedRam;
-            const bootstrapper = "dnet-bootstrap.js";
-
-            // \ud83d\udd01 GATE 4: FORCE PAYLOAD OVERWRITE
-            try {
-                ns.scp(bootstrapper, hostname, currentHost);
-                ns.scp(scriptName, hostname, currentHost);
-            } catch (e) {
-                ns.tryWritePort(14, `[EXCEPTION-2] SCP Payload Transfer Failure to ${hostname} - ${e}`);
-            }
-
-            // \ud83d\udd01 GATE 5: BLOCKED SYSTEM ALLOCATION FALLBACK
-            if (targetFreeRam < scriptCost && targetMaxRam >= scriptCost && !isLabyrinth) {
-                ns.tryWritePort(14, `[RAM-BLOCKED] Host: ${hostname} | Free: ${targetFreeRam}GB / Max: ${targetMaxRam}GB. Deploying lightweight bootstrapper...`);
-
-                try {
-                    let bootPid = ns.exec(bootstrapper, hostname, { threads: 1, preventDuplicates: true }, WORM_VERSION, hostname);
-                    if (bootPid === 0) {
-                        if (!ns.ps(hostname).find(p => p.filename === bootstrapper || p.filename === "dnet-worm.js")) {
-                            ns.tryWritePort(14, `[DEPLOY-FAIL] Host: ${hostname} | Even bootstrapper failed to clear allocation space.`);
-                        }
-                    }
-                } catch (e) {
-                    ns.tryWritePort(14, `[EXCEPTION-3] Bootstrapper Invocation Failure on ${hostname} - ${e}`);
-                }
+            const auth = await serverSolver(ns, hostname, currentHost, logDiag, logSuccess);
+            if (!auth) {
                 continue;
             }
-
-            // \ud83d\udd01 GATE 6: INSUFFICIENT HARDWARE BYPASS
-            if (targetMaxRam < scriptCost && !isLabyrinth) {
-                if (targetMaxRam === 0) {
-                    ns.tryWritePort(14, `[RAM-ZERO] Host: ${hostname} | Inducing migration...`);
-                    for (let j = 0; j < 5; j++) {
-                        await ns.dnet.induceServerMigration(hostname);
-                        await ns.sleep(40);
+            if (auth.auth && !auth.success) {
+                const code = auth.auth.code;
+                if (code !== 351 && code !== 503) {
+                    if (!JSON.stringify(auth).includes("Unauthorized")) {
+                        logDiag(`SERVER SOLVER RESULT: ${JSON.stringify(auth)}`);
                     }
-                } else {
-                    ns.tryWritePort(14, `[RAM-INSUFFICIENT] Host: ${hostname} | Max RAM (${targetMaxRam}GB) cannot support monolith cost (${scriptCost}GB). Bypass logged.`);
-                }
-                continue;
-            }
-
-            // \ud83d\udd01 GATE 7: STANDARD EXECUTION DISPATCH
-            if (authResult.alreadyActive && !isLabyrinth) {
-                try {
-                    ns.exec(scriptName, hostname, { threads: 1, preventDuplicates: true }, WORM_VERSION);
-                } catch (e) {
-                    ns.tryWritePort(14, `[EXCEPTION-4] Legacy Handoff Execution Failure on ${hostname} - ${e}`);
-                }
-                continue;
-            }
-
-            if (authResult.password) {
-                globalPasswordVault[hostname] = authResult.password;
-                try {
-                    ns.tryWritePort(17, JSON.stringify({ host: hostname, pass: authResult.password }));
-                } catch (e) {
-                    ns.tryWritePort(14, `[EXCEPTION-5] Vault Port Synchronization Failure for ${hostname} - ${e}`);
                 }
             }
 
-            ns.tryWritePort(15, `[AUTH-SUCCESS] [${currentHost}] Colonized: ${hostname} (${target.modelId})`);
+            if (!auth.success) continue;
 
-            if (!isLabyrinth) {
-                try {
-                    ns.exec(scriptName, hostname, { threads: 1, preventDuplicates: true }, WORM_VERSION);
-                } catch (e) {
-                    ns.tryWritePort(14, `[EXCEPTION-6] Primary Colonization Invocation Failure on ${hostname} - ${e}`);
+            if (auth.password && globalPasswordVault[hostname] !== auth.password) {
+                globalPasswordVault[hostname] = auth.password;
+                ns.tryWritePort(17, JSON.stringify({ host: hostname, pass: auth.password }));
+            }
+
+            // if (target.modelId === "(The Labyrinth)") continue;
+
+            let shouldDeploy = false;
+            if (wormIsOlder(ns, hostname, scriptName, logDiag)) {
+                await deployBootstrap(ns, hostname, currentHost, logDiag);
+                shouldDeploy = true;
+            }
+
+            let severMaxRAM = ns.getServerMaxRam(hostname);
+            let freeRam = severMaxRAM - ns.getServerUsedRam(hostname);
+
+            if (!shouldDeploy) {
+                if (freeRam >= WORM_COST) {
+                    try {
+                        ns.scp(scriptName, hostname, "home");
+                        ns.exec("dnet-worm.js", hostname, { threads: 1, preventDuplicates: true }, WORM_VERSION);
+                    } catch (e) { logDiag(`Exec failed on ${hostname}: ${e}`); }
                 }
+            }
+
+            if (freeRam < WORM_COST && severMaxRAM > WORM_COST && freeRam < severMaxRAM) {
+                await ns.dnet.memoryReallocation(hostname);
             }
         }
 
+        // =================================================================
+        // 🛰️ OFFICIAL IDLE UTILITY ENGINE
+        // =================================================================
         if (currentHost !== "home" && currentHost !== "darkweb") {
-            try { await ns.dnet.phishingAttack(); }
-            catch (e) { ns.tryWritePort(14, `[EXCEPTION10] - ${e}`) }
-        }
-
-        if (currentHost !== "home" && currentHost !== "darkweb") {
-            let whaleTarget = ns.peek(16);
-            if (whaleTarget !== "NULL DATA" && whaleTarget !== "NULL PORT DATA" && whaleTarget) {
+            // 1. Stock Manipulation Module (Reads target ticker from Port 16 via ns.peek)
+            const stockTarget = ns.peek(16);
+            if (stockTarget && stockTarget !== "NULL PORT DATA" && stockTarget !== "NULL DATA" && stockTarget !== "") {
                 try {
-                    await ns.dnet.promoteStock(whaleTarget);
-                } catch (e) { ns.tryWritePort(14, `[EXCEPTION11] - ${e}`) }
+                    await ns.dnet.promoteStock(stockTarget);
+                } catch (e) {
+                    logDiag(`Stock promotion error: ${e}`)
+                }
+            }
+
+            // 2. Phishing Attack Module (Restricted strictly to darknet servers)
+            try {
+                await ns.dnet.phishingAttack();
+            } catch (e) {
+                logDiag(`Phishing attack error: ${e}`)
             }
         }
-
-        await ns.sleep(2000);
+        await ns.sleep(100);
     }
 }
 
-/** * Orchestrates server status gates, transaction locks, and comprehensive log dumps.
- * @param {NS} ns 
- * @param {string} hostname 
- */
-async function serverSolver(ns, hostname) {
-    let solveStartTime = Date.now();
-
+/** @param {NS} ns */
+// ADD currentHost to the arguments list!
+async function serverSolver(ns, hostname, currentHost, logDiag, logSuccess) {
     if (localCooldowns.has(hostname) && Date.now() < localCooldowns.get(hostname)) return false;
-    if (deadTopology.has(hostname)) return false;
 
     const details = ns.dnet.getServerDetails(hostname);
     if (!details.isConnectedToCurrentServer || !details.isOnline) return false;
 
-    if (details.hasSession) {
-        return { success: true, modelId: details.modelId, duration: 0, password: null, alreadyActive: true };
+    if (details.hasSession && details.modelId !== "(The Labyrinth)") {
+        return { success: true, alreadyActive: true };
     }
 
+    // --- REFINED HEARTBLEED DISCOVERY ---
+    const hb = await ns.dnet.heartbleed(hostname, { peek: true });
+    if (hb && hb.logs) {
+        for (const logEntry of hb.logs) {
+            try {
+                // Safely attempt to parse; if it fails, it's just a text log, not JSON
+                const entry = (typeof logEntry === 'string') ? JSON.parse(logEntry) : logEntry;
+
+                if (entry.code === 200 && entry.passwordAttempted) {
+                    const discoveredPass = entry.passwordAttempted;
+                    if (globalPasswordVault[hostname] !== discoveredPass) {
+                        globalPasswordVault[hostname] = discoveredPass;
+                        ns.tryWritePort(17, JSON.stringify({ host: hostname, pass: discoveredPass }));
+                        logSuccess(`Discovered ${hostname} password via Heartbleed: ${discoveredPass}`);
+                    }
+                }
+            } catch (e) {
+                // Silent catch: logEntry was just text, not JSON, so we ignore it
+                continue;
+            }
+        }
+    }
+
+    // Try vault
     if (globalPasswordVault[hostname]) {
         try {
             ns.dnet.connectToSession(hostname, globalPasswordVault[hostname]);
-            
-            const checkDetails = ns.dnet.getServerDetails(hostname);
-            if (checkDetails.hasSession) {
-                return { success: true, modelId: details.modelId, duration: 0, password: globalPasswordVault[hostname], alreadyActive: true };
+            if (ns.dnet.getServerDetails(hostname).hasSession) {
+                return { success: true, password: globalPasswordVault[hostname], alreadyActive: true };
             } else {
-                ns.tryWritePort(14, `\\u26a0\\ufe0f [VAULT-STALE] Stale password rejected for ${hostname}. Purging key.`);
                 delete globalPasswordVault[hostname];
             }
-        } catch (e) { 
-            ns.tryWritePort(14, `[EXCEPTION12] - Session connection failed on ${hostname} - ${e}`);
-            delete globalPasswordVault[hostname];
-        }
+        } catch (e) { delete globalPasswordVault[hostname]; }
     }
 
-    if (!acquireNetworkLock(ns, hostname, details.modelId)) return false;
+    if (!acquireLock(ns, hostname, details.modelId)) return false;
 
     try {
-        const authPayload = await executeCrackingMatrix(ns, hostname, details);
+        const result = await crackingMatrix(ns, hostname, currentHost, details, logDiag, logSuccess);
 
-        if (!authPayload || !authPayload.success) {
-            try {
-                let hb = await ns.dnet.heartbleed(hostname, { peek: true });
-                if (hb) {
-                    if (hb.code === ns.enums.DarknetResponseCode.DirectConnectionRequired) {
-                        deadTopology.add(hostname);
-                    } else if (hb.code === ns.enums.DarknetResponseCode.ServiceUnavailable) {
-                        return false; 
-                    } else {
-                        let stallKey = `${hostname}-${hb.code}`;
-                        if (!reportedStalls.has(stallKey)) {
-                            await dumpDetailedDiagnostic(ns, hostname, details);
-                            reportedStalls.add(stallKey);
-                        }
-                    }
+        if (!result || !result.success) {
+            // 1. Immediately poll the live network status after matrix processing ends
+            const freshHb = await ns.dnet.heartbleed(hostname, { peek: true });
+            const networkCode = freshHb?.code;
+
+            // 2. Network State Latch: If the server dropped or migrated, override the code
+            if (networkCode === 351 || networkCode === 503) {
+                if (result && result.auth) {
+                    result.auth.code = networkCode;
+                    result.auth.message = freshHb.message;
+                } else if (result) {
+                    result.auth = { code: networkCode, message: freshHb.message };
                 }
-            } catch (innerError) {
-                ns.tryWritePort(14, `Logging failed: ${innerError}`);
+            }
+
+            const targetAuth = result?.auth || result;
+            const code = targetAuth?.code;
+
+            // 3. Evaluate the unified code threshold
+            if (code !== 351 && code !== 503) {
+                let stallKey = `${hostname}-${details.modelId}`;
+                if (!reportedStalls.has(stallKey)) {
+                    logDiag(`STALL: ${hostname} (${details.modelId}) Hint: ${details.passwordHint}`);
+
+                    let hbString = JSON.stringify(freshHb);
+                    if (!hbString.includes("Server restarting") && !JSON.stringify(targetAuth).includes("Unauthorized")) {
+                        logDiag(`STALL DETAILS: ${hbString}`);
+                        logDiag(`STALL AUTH DETAILS: ${JSON.stringify(targetAuth)}`);
+                    }
+                    reportedStalls.add(stallKey);
+                }
             }
         }
-
-        return authPayload && authPayload.success ? { success: true, modelId: details.modelId, duration: Date.now() - solveStartTime, password: authPayload.password, alreadyActive: false } : false;
-
-    } catch (fatalException) {
-        let exceptionKey = `${hostname}-${fatalException.toString()}`;
-
-        if (!reportedUnknowns.has(exceptionKey)) {
-            ns.tryWritePort(14, `\ud83d\udd01 [MATRIX-CRASH] Unhandled runtime exception on ${hostname} (${details.modelId}): ${fatalException.message || fatalException}`);
-            reportedUnknowns.add(exceptionKey);
-        }
+        return result;
+    } catch (e) {
+        logDiag(`CRASH in matrix for ${hostname}: ${e}`);
         return false;
-
     } finally {
-        releaseNetworkLock(ns, hostname);
+        releaseLock(ns, hostname);
     }
 }
 
-/**
- * \ud83d\udd01 AUTOMATED TERMINAL EMULATOR: Captures and stringifies full background UI states to Port 14.
- * @param {NS} ns
- * @param {string} hostname
- * @param {any} details
- */
-async function dumpDetailedDiagnostic(ns, hostname, details) {
-    const divider = "=".repeat(80);
-    let logBuffer = [];
+/** @param {NS} ns */
+async function crackingMatrix(ns, hostname, currentHost, details, logDiag, logSuccess) {
+    const model = details.modelId;
+    const wordSourceFile = "darknet-words.txt";
 
-    logBuffer.push(`
-\ud83d\udd01 [STALL-ALERT] FULL METADATA DUMP FOR UNRESOLVED HOST: ${hostname}`);
-    logBuffer.push(divider);
-    logBuffer.push(`[UI FIELDS] Model: ${details.modelId}`);
-    logBuffer.push(`[UI FIELDS] Hint:  ${details.passwordHint}`);
-    logBuffer.push(`[UI FIELDS] Rules: Length: ${details.passwordLength} | Format: ${details.passwordFormat}`);
-    if (details.data) {
-        logBuffer.push(`[UI FIELDS] Variable Payload Data: ${JSON.stringify(details.data)}`);
-    }
-    logBuffer.push(divider);
-
-    try {
-        let hb = await ns.dnet.heartbleed(hostname, { peek: true });
-        if (hb) {
-            logBuffer.push(`[FIREWALL RESPONSE] Status: ${hb.success ? "SUCCESS" : "FAILED"}`);
-            logBuffer.push(`[FIREWALL RESPONSE] Code:   ${hb.code || 401}`);
-            logBuffer.push(`[FIREWALL RESPONSE] Msg:    ${hb.message || "Unauthorized"}`);
-            logBuffer.push(divider);
-            let stringifiedHB = JSON.stringify(hb, null, 2);
-            logBuffer.push(`[RAW LOGS] hb:
-${stringifiedHB}`);
+    // Helper for Heartbleed checks
+    const getLogEntry = async (guess) => {
+        for (let i = 0; i < 15; i++) {
+            await ns.sleep(40);
+            const hb = await ns.dnet.heartbleed(hostname, { peek: true });
+            if (hb && hb.logs) {
+                const logs = Array.isArray(hb.logs) ? hb.logs : [hb.logs];
+                const entry = logs.find(l => {
+                    const s = typeof l === 'string' ? l : JSON.stringify(l);
+                    // Match the padded guess ("0050") OR its unpadded version ("50")
+                    const unpadded = /^\d+$/.test(guess) ? parseInt(guess, 10).toString() : guess;
+                    return s.includes(guess) || s.includes(unpadded);
+                });
+                if (entry) return entry;
+            }
         }
-    } catch (e) { ns.tryWritePort(14, `[EXCEPTION13] - ${e}`) }
-
-    logBuffer.push(divider);
-    let finalDiagnosticReport = logBuffer.join("");
-    ns.tryWritePort(14, finalDiagnosticReport);
-}
-
-/** * High-fidelity generic puzzle solver engineered to parse dynamic telemetry filters.
- * @param {NS} ns
- * @param {string} hostname
- * @param {any} details
- */
-async function executeCrackingMatrix(ns, hostname, details) {
-    const parseRoman = (str) => {
-        if (!str) return 0;
-        if (str.toLowerCase() === "nulla") return 0;
-        const rMap = { 'I': 1, 'V': 5, 'X': 10, 'L': 50, 'C': 100, 'D': 500, 'M': 1000 };
-        let val = 0;
-        for (let i = 0; i < str.length; i++) {
-            let curr = rMap[str[i].toUpperCase()];
-            let next = rMap[str[i + 1]?.toUpperCase()];
-            if (next > curr) { val += (next - curr); i++; }
-            else { val += curr; }
-        }
-        return val;
+        return null;
     };
 
-    switch (details.modelId) {
+    // =================================================================
+    // GENERATOR UTILITY (With Editor Linter Bypass Directive)
+    // =================================================================
+    function* primeGenerator(initialPool = []) {
+        for (const p of initialPool) yield p;
+        let candidate = initialPool.length > 0 ? initialPool[initialPool.length - 1] + 2 : 2;
+        if (candidate === 4) { yield 2; yield 3; candidate = 5; }
+
+        // @ignore-infinite
+        while (true) {
+            let isPrime = true;
+            for (let i = 2; i * i <= candidate; i++) {
+                if (candidate % i === 0) { isPrime = false; break; }
+            }
+            if (isPrime) yield candidate;
+            candidate += 2;
+        }
+    }
+
+    let auth;
+
+    switch (model) {
         case "ZeroLogon":
-            return { success: (await ns.dnet.authenticate(hostname, "")).success, password: "" };
+            auth = await ns.dnet.authenticate(hostname, "");
+            return { success: auth.success, password: "", auth: auth };
 
-        case "FreshInstall_1.0":
+        case "FreshInstall_1.0": {
+            const len = details.passwordLength || 4;
             if (details.passwordFormat === "numeric") {
-                let fiLen = details.passwordLength || 4;
-
-                const commonPins = [
-                    "1234567890".slice(0, fiLen),
-                    "0123456789".slice(0, fiLen),
-                    "9876543210".slice(0, fiLen)
-                ];
-
-                ["0", "1", "9", "5"].forEach(digit => commonPins.push(digit.repeat(fiLen)));
-
-                let validPins = Array.from(new Set(commonPins));
-                for (const guess of validPins) {
-                    if ((await ns.dnet.authenticate(hostname, guess)).success) {
-                        return { success: true, password: guess };
+                const commons = ["123456789".slice(0, len), "0".repeat(len), "1".repeat(len), "9".repeat(len)];
+                for (const g of commons) {
+                    if ((await ns.dnet.authenticate(hostname, g)).success) {
+                        return { success: true, password: g };
                     }
                 }
+                for (let i = 0; i < Math.pow(10, len); i++) {
+                    const g = i.toString().padStart(len, '0');
+                    auth = await ns.dnet.authenticate(hostname, g);
+                    if (auth.success) return { success: true, password: g };
+                    if (i % 50 === 0) await ns.sleep(10);
+                }
+            } else {
+                const hint = details.passwordHint || "";
+                const words = hint.split(/\s+/);
+                const last = words[words.length - 1].replace(/[^a-zA-Z0-9]/g, "");
+                if (last && (await ns.dnet.authenticate(hostname, last)).success) return { success: true, password: last };
 
-                for (let i = 0; i < Math.pow(10, fiLen); i++) {
-                    let guess = i.toString().padStart(fiLen, '0');
-                    if ((await ns.dnet.authenticate(hostname, guess)).success) {
-                        return { success: true, password: guess };
-                    }
-
-                    if (i % 25 === 0) {
-                        if (ns.dnet.getServerDetails(hostname).hasSession) {
-                            return { success: true, password: null, alreadyActive: true };
+                // Harvested Dictionary Fallback Step
+                const dict = ["password", "admin", "root", "default"];
+                if (ns.fileExists(wordSourceFile, "home")) {
+                    if (currentHost === "home" || ns.scp(wordSourceFile, currentHost, "home")) {
+                        const harvested = ns.read(wordSourceFile).split(/\r?\n/);
+                        for (const w of harvested) {
+                            const clean = w.trim();
+                            if (clean.length === len) dict.push(clean);
                         }
                     }
                 }
-            } else {
-                const words = details.passwordHint.trim().split(" ");
-                const lastWord = words[words.length - 1].replace(/[^a-zA-Z0-9]/g, "");
-                if (lastWord && (await ns.dnet.authenticate(hostname, lastWord)).success) return { success: true, password: lastWord };
-
-                const commonDefaults = ["password", "admin", "root", "1234", "default", "settings"];
-                for (const pwd of commonDefaults) {
-                    let adjustedPwd = pwd;
-                    if (adjustedPwd.length > details.passwordLength) adjustedPwd = adjustedPwd.slice(0, details.passwordLength);
-                    if ((await ns.dnet.authenticate(hostname, adjustedPwd)).success) return { success: true, password: adjustedPwd };
+                const uniqueCandidates = Array.from(new Set(dict));
+                for (const g of uniqueCandidates) {
+                    const slicedGuess = g.slice(0, len);
+                    auth = await ns.dnet.authenticate(hostname, slicedGuess);
+                    if (auth.success) return { success: true, password: slicedGuess };
                 }
             }
-            return { success: false };
+            return { success: false, auth: auth };
+        }
 
         case "AccountsManager_4.2": {
-            let fiLen = details.passwordLength || 4;
-            let low = 0;
-            let high = Math.pow(10, fiLen) - 1;
+            const len = details.passwordLength || 4;
+            let low = 0, high = Math.pow(10, len) - 1;
 
-            let rangeMatch = details.passwordHint.match(/\d+/g);
-            if (rangeMatch && rangeMatch.length >= 2) {
-                high = parseInt(rangeMatch[rangeMatch.length - 1], 10);
-                low = parseInt(rangeMatch[rangeMatch.length - 2], 10);
+            const matches = details.passwordHint.match(/\d+/g);
+            if (matches && matches.length >= 2) {
+                low = parseInt(matches[0], 10);
+                high = parseInt(matches[1], 10);
             }
 
-            let accountsGuesses = 0;
-            let searchLimit = Math.ceil(Math.log2(high - low + 1) * 1.1) + 2;
-            while (low <= high && accountsGuesses < searchLimit) {
-                accountsGuesses++;
-                let mid = Math.floor((low + high) / 2);
-                let guessStr = mid.toString().padStart(fiLen, '0');
+            while (low <= high) {
+                const mid = Math.floor((low + high) / 2);
+                const g = mid.toString().padStart(len, '0');
 
-                if ((await ns.dnet.authenticate(hostname, guessStr)).success) return { success: true, password: guessStr };
-                await ns.sleep(40);
+                auth = await ns.dnet.authenticate(hostname, g);
+                if (auth.success) return { success: true, password: g };
 
-                let hb = await ns.dnet.heartbleed(hostname, { peek: true });
-                if (hb && hb.logs) {
-                    let logsArr = Array.isArray(hb.logs) ? hb.logs : [hb.logs];
-                    let feedbackText = "";
+                await ns.sleep(30);
+                const bleed = await ns.dnet.heartbleed(hostname);
+                if (bleed && bleed.logs && bleed.logs.length > 0) {
+                    let directionFound = false;
 
-                    for (let i = 0; i < logsArr.length; i++) {
-                        let logStr = typeof logsArr[i] === 'object' ? JSON.stringify(logsArr[i]) : String(logsArr[i]).toLowerCase();
-                        if (logStr.includes(`"passwordattempted":"${guessStr}"`) || logStr.includes(`passwordattempted: ${guessStr}`)) {
-                            feedbackText = logStr;
+                    // Scan backward to match our exact numerical guess signature
+                    for (let i = bleed.logs.length - 1; i >= 0; i--) {
+                        const logObj = JSON.parse(bleed.logs[i]);
+                        if (logObj.passwordAttempted === g) {
+                            const feedBackStr = String(logObj.data || "").toLowerCase();
+                            if (feedBackStr.includes("higher")) {
+                                low = mid + 1;
+                                directionFound = true;
+                            } else if (feedBackStr.includes("lower")) {
+                                high = mid - 1;
+                                directionFound = true;
+                            }
                             break;
                         }
                     }
-
-                    if (feedbackText.includes("higher")) {
-                        low = mid + 1;
-                    } else if (feedbackText.includes("lower")) {
-                        high = mid - 1;
-                    } else {
-                        break;
-                    }
+                    if (!directionFound) break;
                 } else {
                     break;
                 }
             }
-
-            for (let i = low; i <= high; i++) {
-                let finalGuess = i.toString().padStart(fiLen, '0');
-                if ((await ns.dnet.authenticate(hostname, finalGuess)).success) return { success: true, password: finalGuess };
-            }
-            return { success: false };
+            return { success: false, auth: auth };
         }
 
-        case "BellaCuore":
-            let bHint = details.passwordHint || "";
-            if (bHint.includes("between")) {
-                let limits = bHint.match(/'([^']+)'/g);
-                if (limits && limits.length >= 2) {
-                    let minVal = parseRoman(limits[0].replace(/'/g, ''));
-                    let maxVal = parseRoman(limits[1].replace(/'/g, ''));
-                    let bLen = details.passwordLength || 3;
+        case "RateMyPix.Auth": {
+            const len = details.passwordLength || 5;
+            const format = details.passwordFormat || "numeric";
+            let pool = "0123456789";
+            if (format === "alphanumeric") pool = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+            else if (format === "alphabetic") pool = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
 
-                    let low = minVal;
-                    let high = maxVal;
-                    let bGuesses = 0;
+            let current = Array(len).fill(pool[0]);
+            let lastCapturedResult = null;
 
-                    let searchLimit = Math.ceil(Math.log2(high - low + 1) * 1.1) + 2;
+            const getScore = async (g) => {
+                // 1. DIRECT QUERY GATEWAY
+                const res = await ns.dnet.authenticate(hostname, g);
+                lastCapturedResult = res; // Maintain reference for upward bubbling
 
-                    while (low <= high && bGuesses < searchLimit) {
-                        bGuesses++;
-                        let mid = Math.floor((low + high) / 2);
-                        let guess = mid.toString().padStart(bLen, '0');
+                if (res && res.attemptedPassword === g) {
+                    if (res.success) return { success: true, score: 999, raw: res };
+                    const feedback = res.data || "";
+                    const score = feedback.startsWith("0/") ? 0 : (feedback.match(/🌶️/g) || []).length;
+                    return { success: false, score: score, raw: res };
+                }
 
-                        if ((await ns.dnet.authenticate(hostname, guess)).success) return { success: true, password: guess };
-                        await ns.sleep(40);
+                // 2. ASYNCHRONOUS HEARTBLEED FALLBACK BACKSTOP
+                for (let retry = 0; retry < 15; retry++) {
+                    await ns.sleep(40);
+                    const hb = await ns.dnet.heartbleed(hostname, { peek: true });
+                    if (hb && hb.logs) {
+                        const logs = Array.isArray(hb.logs) ? hb.logs : [hb.logs];
 
-                        let hb = await ns.dnet.heartbleed(hostname, { peek: true });
-                        if (hb && hb.logs) {
-                            let logsArr = Array.isArray(hb.logs) ? hb.logs : [hb.logs];
-                            let feedbackText = "";
+                        for (const l of logs) {
+                            try {
+                                const entry = (typeof l === 'string') ? JSON.parse(l) : l;
 
-                            for (let i = 0; i < logsArr.length; i++) {
-                                let logStr = typeof logsArr[i] === 'object' ? JSON.stringify(logsArr[i]) : String(logsArr[i]).toUpperCase();
-                                if (logStr.includes(`"PASSWORDATTEMPTED":"${guess}"`) || logStr.includes(`PASSWORDATTEMPTED: ${guess}`) || logStr.includes(`PASSWORDATTEMPTED: ${mid}`)) {
-                                    feedbackText = logStr;
-                                    break;
+                                // Enforce strict transaction receipt validation
+                                if (entry && entry.passwordAttempted === g) {
+                                    lastCapturedResult = entry;
+                                    if (entry.code === 200 || entry.success) return { success: true, score: 999, raw: entry };
+
+                                    const feedback = entry.data || "";
+                                    const score = feedback.startsWith("0/") ? 0 : (feedback.match(/🌶️/g) || []).length;
+                                    return { success: false, score: score, raw: entry };
                                 }
+                            } catch (e) {
+                                // Ignore non-JSON system chatter logs lines safely
+                                continue;
                             }
-
-                            if (feedbackText.includes("PARUM")) {
-                                low = mid + 1;
-                            } else if (feedbackText.includes("NIMIS") || feedbackText.includes("LONGUS") || feedbackText.includes("MAGNUS") || feedbackText.includes("ALTA")) {
-                                high = mid - 1;
-                            } else {
-                                high = mid - 1;
-                            }
-                        } else {
-                            break;
                         }
                     }
+                }
+                return { success: false, score: -1, raw: lastCapturedResult };
+            };
 
-                    for (let i = low; i <= high; i++) {
-                        let guess = i.toString().padStart(bLen, '0');
-                        if ((await ns.dnet.authenticate(hostname, guess)).success) return { success: true, password: guess };
-                        if (i % 15 === 0) await ns.sleep(20);
+            // Establish primary baseline
+            let baseRes = await getScore(current.join(''));
+            if (baseRes.success || baseRes.score === 999) return { success: true, password: current.join('') };
+            let baseScore = baseRes.score;
+
+            let consecutiveErrors = 0;
+
+            // Positional Isolation Search Matrix
+            for (let i = 0; i < len; i++) {
+                const origChar = current[i];
+
+                for (let j = 1; j < pool.length; j++) {
+                    current[i] = pool[j];
+                    const res = await getScore(current.join(''));
+
+                    if (res.success || res.score === 999) return { success: true, password: current.join('') };
+
+                    if (res.score === -1) {
+                        consecutiveErrors++;
+                        if (consecutiveErrors > 5) {
+                            current[i] = origChar;
+                            break;
+                        }
+                        j--;
+                        await ns.sleep(100);
+                        continue;
+                    }
+                    consecutiveErrors = 0;
+
+                    if (res.score > baseScore) {
+                        baseScore = res.score;
+                        break; // Step verified, lock current pool[j] and advance position
+                    } else if (res.score < baseScore) {
+                        current[i] = origChar;
+                        break; // Baseline was already optimal, restore and advance position
+                    }
+                }
+            }
+
+            // Total loop expiration fallback: return failure state along with the raw bubbled object
+            return { success: false, auth: lastCapturedResult };
+        }
+
+        case "Factori-Os": {
+            const len = details.passwordLength || 2;
+            const max = Math.pow(10, len) - 1;
+            const initialPrimes = [2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43,
+                47, 53, 59, 61, 67, 71, 73, 79, 83, 89, 97, 101, 103, 107, 109, 113, 127,
+                131, 137, 139, 149, 151, 157, 163, 167, 173, 179, 181, 191, 193, 197, 199,
+                211, 223, 227, 229, 233, 239, 241, 251, 257, 263, 269, 271, 277, 281, 283,
+                293, 307, 311, 313, 317, 331, 337, 347, 349, 353, 359, 367, 373, 379, 383,
+                389, 397, 401, 409, 419, 421, 431, 433, 439, 443, 449, 457, 461, 463, 467,
+                479, 487, 491, 499, 503, 509, 521, 523, 541];
+
+            // Connected to the fallback stream
+            const primeStream = primeGenerator(initialPrimes);
+
+            const checkDivisibility = async (n) => {
+                const g = n.toString().padStart(len, '0');
+                // Leak Path 1 Fixed: Bind sequential prime tests to the matrix frame scope
+                auth = await ns.dnet.authenticate(hostname, g);
+                if (auth.success) return "WIN";
+                await ns.sleep(30);
+                const entry = await getLogEntry(g);
+                if (entry) {
+                    const s = typeof entry === 'string' ? entry : JSON.stringify(entry);
+                    return s.includes("IS divisible") || s.includes('"data":true') || s.includes('data: true');
+                }
+                return false;
+            };
+
+            let knownProduct = 1;
+            while (true) {
+                const p = primeStream.next().value;
+                if (p > max || knownProduct * p > max) break;
+
+                let power = 1;
+                while (true) {
+                    const testVal = Math.pow(p, power);
+                    if (testVal > max) break;
+                    const res = await checkDivisibility(testVal);
+                    if (res === "WIN") return { success: true, password: testVal.toString().padStart(len, '0') };
+                    if (res === true) power++;
+                    else break;
+                }
+                if (power > 1) {
+                    knownProduct *= Math.pow(p, power - 1);
+                    const finalStr = knownProduct.toString().padStart(len, '0');
+                    // Leak Path 2 Fixed: Capture tracking object on partial product checks
+                    auth = await ns.dnet.authenticate(hostname, finalStr);
+                    if (auth.success) return { success: true, password: finalStr };
+                }
+            }
+
+            // Fallback localized factor brute step
+            for (let i = 0; i <= max; i++) {
+                if (i % knownProduct === 0) {
+                    const g = i.toString().padStart(len, '0');
+                    // Leak Path 3 Fixed: Capture tracking object during fallback brute loop executions
+                    auth = await ns.dnet.authenticate(hostname, g);
+                    if (auth.success) return { success: true, password: g };
+                }
+            }
+
+            // Leak Path 4 Fixed: Propagate the absolute final failed transaction telemetry upward
+            return { success: false, auth: auth };
+        }
+
+        case "EuroZone Free": {
+            const countries = ["albania", "andorra", "austria", "belgium", "bulgaria",
+                "croatia", "cyprus", "denmark", "estonia", "finland", "france", "germany",
+                "greece", "hungary", "iceland", "ireland", "italy", "latvia", "lithuania",
+                "luxembourg", "malta", "netherlands", "norway", "poland", "portugal",
+                "romania", "russia", "serbia", "slovakia", "slovenia", "spain", "sweden",
+                "switzerland", "turkey", "ukraine", "united kingdom", "the united kingdom",
+                "republic of cyprus"
+            ];
+            const len = details.passwordLength;
+            const candidates = countries.filter(c => c.length === len);
+
+            // If the filter returns nothing, skip processing and return the gap message instantly
+            if (candidates.length === 0) {
+                return { success: false, auth: { message: "word length gap", length: len } };
+            }
+
+            for (const c of candidates) {
+                const variants = [c, c.toUpperCase(), c.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')];
+                for (const v of variants) {
+                    auth = await ns.dnet.authenticate(hostname, v);
+                    if (auth.success) return { success: true, password: v };
+                }
+            }
+            return { success: false, auth: auth };
+        }
+
+        case "TopPass": {
+            const passDict = {
+                3: ["123", "abc", "god", "cat", "dog", "sex", "win", "pop", "sam", "tom", "fox", "ace"],
+                4: ["1234", "qwer", "test", "love", "baby", "rock", "star", "king", "pass", "cool", "root", "l33t", "wolf", "lion", "zero", "link"],
+                5: ["12345", "login", "admin", "hello", "trust", "enter", "ninja", "tiger", "angel", "jesus", "money", "black", "white", "smart", "cyber", "linux", "apple"],
+                6: ["123456", "654321", "112233", "123123", "987654", "121212", "012345", "696969", "666666", "123321", "967609", "555555", "131313", "777777", "qwerty", "secret", "dragon", "master", "system", "qazwsx", "123qwe", "jordan", "pepper", "zxcvbn", "maggie", "159753", "aaaaaa", "ginger", "buster", "asdfgh", "hunter", "430165", "abc123", "monkey", "shadow"],
+                7: ["1234567", "welcome", "network", "connect", "warrior", "phoenix", "hacking", "gateway", "computer", "sunshine", "letmein", "pokemon", "freedom", "batman", "mustard", "forever", "perfect", "justice", "destiny", "phantom", "crystal", "digital", "unknown", "offline", "account", "startup"],
+                8: ["12345678", "password", "iloveyou", "princess", "baseball", "football", "superman", "starwars", "internet", "security", "terminal", "database", "critical", "software", "download", "firewall", "override", "loopback", "infinite", "absolute", "1qaz2wsx", "trustno1", "jennifer", "44215175", "michelle", "11111111"],
+                9: ["123456789", "character", "anonymous", "dangerous", "interface", "mainframe", "algorithm", "developer", "encrypted", "masterkey", "processor"],
+                10: ["1234567890", "letmeingin", "cyberpunk2", "properties", "production", "background", "everything", "collection", "management", "experience"]
+            };
+
+            const dict = [...(passDict[details.passwordLength] || [])];
+
+            if (ns.fileExists(wordSourceFile, "home")) {
+                if (currentHost === "home" || ns.scp(wordSourceFile, currentHost, "home")) {
+                    const words = ns.read(wordSourceFile).split(/\r?\n/);
+                    for (const w of words) {
+                        const cleanWord = w.trim();
+                        if (cleanWord.length === details.passwordLength) dict.push(cleanWord);
+                    }
+                }
+            }
+            const unique = Array.from(new Set(dict));
+            if (unique.length === 0) {
+                return { success: false, auth: { message: "word length gap", length: details.passwordLength } };
+            }
+            for (const g of unique) {
+                auth = await ns.dnet.authenticate(hostname, g);
+                if (auth.success) return { success: true, password: g };
+            }
+            return { success: false, auth: auth };
+        }
+
+        case "BellaCuore": {
+            const parseRoman = (str) => {
+                if (!str || str.toLowerCase() === "nulla") return 0;
+                const rMap = { 'I': 1, 'V': 5, 'X': 10, 'L': 50, 'C': 100, 'D': 500, 'M': 1000 };
+                let val = 0;
+                for (let i = 0; i < str.length; i++) {
+                    let curr = rMap[str[i].toUpperCase()], next = rMap[str[i + 1]?.toUpperCase()];
+                    if (next > curr) { val += (next - curr); i++; } else val += curr;
+                }
+                return val;
+            };
+            let hint = details.passwordHint || "";
+
+            // Safe fallback descriptor if regex matching or parsing fails entirely
+            auth = { message: "no authentication attempted", hint: hint };
+
+            if (hint.includes("between")) {
+                let limits = hint.match(/'([^']+)'/g);
+                if (limits && limits.length >= 2) {
+                    let low = parseRoman(limits[0].replace(/'/g, '')), high = parseRoman(limits[1].replace(/'/g, ''));
+                    const len = details.passwordLength || 3;
+                    while (low <= high) {
+                        let mid = Math.floor((low + high) / 2), g = mid.toString().padStart(len, '0');
+
+                        // Capture authentication telemetry inside the binary search loop
+                        auth = await ns.dnet.authenticate(hostname, g);
+                        if (auth.success) return { success: true, password: g };
+
+                        let entry = await getLogEntry(g);
+                        if (entry) {
+                            let s = (typeof entry === 'string' ? entry : JSON.stringify(entry)).toUpperCase();
+                            if (s.includes("PARUM")) low = mid + 1;
+                            else if (s.includes("NIMIS") || s.includes("LONGUS") || s.includes("MAGNUS") || s.includes("ALTA")) high = mid - 1;
+                            else break;
+                        } else break;
                     }
                 }
             } else {
-                let romanStr = details.data || "";
-                if (!romanStr) {
-                    let rMatch = bHint.match(/'([IVXLCDM]+)'/);
-                    if (rMatch) romanStr = rMatch[1];
-                }
-                if (romanStr) {
-                    let pw = parseRoman(romanStr).toString();
-                    if ((await ns.dnet.authenticate(hostname, pw)).success) return { success: true, password: pw };
+                let roman = details.data || (hint.match(/'([IVXLCDM]+)'/) || [])[1];
+                if (roman) {
+                    let pw = parseRoman(roman).toString();
+
+                    // Capture authentication telemetry for direct translation path
+                    auth = await ns.dnet.authenticate(hostname, pw);
+                    if (auth.success) return { success: true, password: pw };
                 }
             }
-            return { success: false };
+            return { success: false, auth: auth };
+        }
 
         case "DeskMemo_3.1":
-            const memoMatch = details.passwordHint.match(/\d+/);
-            return memoMatch ? { success: (await ns.dnet.authenticate(hostname, memoMatch[0])).success, password: memoMatch[0] } : { success: false };
+        case "CloudBlare(tm)": {
+            // Seed a safe structural fallback in case regex extraction yields nothing
+            auth = { message: "no numeric sequences extracted from metadata", model: model };
 
-        case "CloudBlare(tm)":
-            let captchaDigits = "";
-            if (details.data) {
-                for (const char of details.data) {
-                    if (!isNaN(char) && char !== " ") captchaDigits += char;
-                }
-            }
-            if (captchaDigits && (await ns.dnet.authenticate(hostname, captchaDigits)).success) return { success: true, password: captchaDigits };
-            let blareMatch = details.passwordHint.match(/\d+/);
-            return blareMatch ? { success: (await ns.dnet.authenticate(hostname, blareMatch[0])).success, password: blareMatch[0] } : { success: false };
-
-        case "RateMyPix.Auth":
-            let rpmLen = details.passwordLength || 5;
-            let currentPin = Array(rpmLen).fill('0');
-
-            const alphaNumericPool = details.passwordFormat === "numeric"
-                ? "0123456789"
-                : "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ!@#$%^&*()_+-=[]{}|;':,./<>?";
-
-            await ns.dnet.authenticate(hostname, currentPin.join(''));
-            await ns.sleep(40);
-            let hbInit = await ns.dnet.heartbleed(hostname, { peek: true });
-            let lastScore = 0;
-            if (hbInit && hbInit.logs) {
-                let logStr = Array.isArray(hbInit.logs) ? JSON.stringify(hbInit.logs) : String(hbInit.logs);
-                let m = logStr.match(/"data"\s*:\s*"([^"]+)\/\d+"/) || logStr.match(/([^"{\s]+)\/\d+/);
-                if (m) {
-                    let val = m[1].trim();
-                    lastScore = /^\d+$/.test(val) ? parseInt(val, 10) : Array.from(val).length;
+            let matches = (details.data || details.passwordHint || "").match(/\d+/g);
+            if (matches) {
+                for (const g of matches) {
+                    // Capture tracking object on parsed hint targets
+                    auth = await ns.dnet.authenticate(hostname, g);
+                    if (auth.success) return { success: true, password: g };
                 }
             }
 
-            for (let pos = 0; pos < rpmLen; pos++) {
-                let originalChar = currentPin[pos];
-                let locked = false;
-
-                for (let cIdx = 0; cIdx < alphaNumericPool.length; cIdx++) {
-                    let char = alphaNumericPool[cIdx];
-                    currentPin[pos] = char;
-                    let guess = currentPin.join('');
-
-                    if ((await ns.dnet.authenticate(hostname, guess)).success) return { success: true, password: guess };
-                    await ns.sleep(40);
-
-                    let hb = await ns.dnet.heartbleed(hostname, { peek: true });
-                    if (hb && hb.logs) {
-                        let logsArr = Array.isArray(hb.logs) ? hb.logs : [hb.logs];
-                        let newScore = null;
-
-                        for (let i = 0; i < logsArr.length; i++) {
-                            let logStr = typeof logsArr[i] === 'object' ? JSON.stringify(logsArr[i]) : String(logsArr[i]);
-                            if (logStr.includes(`"passwordAttempted":"${guess}"`) || logStr.includes(`passwordAttempted: ${guess}`)) {
-                                let m = logStr.match(/"data"\s*:\s*"([^"]+)\/\d+"/) || logStr.match(/([^"{\s]+)\/\d+/);
-                                if (m) {
-                                    let val = m[1].trim();
-                                    newScore = /^\d+$/.test(val) ? parseInt(val, 10) : Array.from(val).length;
-                                    break;
-                                }
-                            }
-                        }
-
-                        if (newScore !== null) {
-                            if (newScore > lastScore) {
-                                lastScore = newScore;
-                                locked = true;
-                                break;
-                            } else if (newScore < lastScore) {
-                                currentPin[pos] = originalChar;
-                                locked = true;
-                                break;
-                            }
-                        }
-                    }
+            if (model === "CloudBlare(tm)" && details.data) {
+                let digits = details.data.replace(/\D/g, "");
+                if (digits) {
+                    // Capture tracking object on complete stripped digit strings
+                    auth = await ns.dnet.authenticate(hostname, digits);
+                    if (auth.success) return { success: true, password: digits };
                 }
-                if (!locked) currentPin[pos] = originalChar;
-            }
-            return { success: (await ns.dnet.authenticate(hostname, currentPin.join(''))).success, password: currentPin.join('') };
-
-        case "Factori-Os": {
-            let fLength = details.passwordLength || 2;
-            if (details.passwordFormat !== "numeric") return { success: false };
-
-            let maxVal = Math.pow(10, fLength) - 1;
-            await ns.dnet.authenticate(hostname, "0".repeat(fLength));
-            await ns.sleep(40);
-
-            let fHb = await ns.dnet.heartbleed(hostname, { peek: true });
-            let divisors = [], nonDivisors = [];
-            if (fHb && fHb.logs) {
-                let fLogStr = Array.isArray(fHb.logs) ? JSON.stringify(fHb.logs) : String(fHb.logs);
-                let incMatches = [...fLogStr.matchAll(/IS divisible by '(\d+)'/gi)];
-                divisors = incMatches.map(m => parseInt(m[1], 10)).filter(d => d > 0);
-                let excMatches = [...fLogStr.matchAll(/is not divisible by '(\d+)'/gi)];
-                nonDivisors = excMatches.map(m => parseInt(m[1], 10)).filter(d => d > 0);
             }
 
-            let step = 1;
-            if (divisors.length > 0) {
-                const gcd = (a, b) => b ? gcd(b, a % b) : a;
-                const lcm = (a, b) => (a * b) / gcd(a, b);
-                step = divisors.reduce((acc, curr) => lcm(acc, curr), 1);
-            }
-
-            for (let i = step; i <= maxVal; i += step) {
-                if (nonDivisors.some(d => i % d === 0)) continue;
-                let finalStr = i.toString().padStart(fLength, '0');
-                if ((await ns.dnet.authenticate(hostname, finalStr)).success) return { success: true, password: finalStr };
-            }
-            return { success: false };
+            return { success: false, auth: auth };
         }
 
         case "KingOfTheHill": {
-            let kLength = details.passwordLength || 2;
-            let maxVal = Math.pow(10, kLength) - 1;
+            const len = details.passwordLength || 2, max = Math.pow(10, len) - 1;
 
-            const getAltitude = async (guessInt) => {
-                let guessStr = guessInt.toString().padStart(kLength, '0');
-                if ((await ns.dnet.authenticate(hostname, guessStr)).success) {
-                    return { success: true, password: guessStr, altitude: Infinity };
-                }
+            const getAlt = async (n) => {
+                const g = n.toString().padStart(len, '0');
 
-                await ns.sleep(40);
-                let hb = await ns.dnet.heartbleed(hostname, { peek: true });
-                let altitude = 0;
+                // Telemetry Capture 1: Bind core sampling authentication to matrix scope
+                auth = await ns.dnet.authenticate(hostname, g);
+                if (auth.success) return { win: true, g };
 
-                if (hb && hb.logs) {
-                    let logStr = Array.isArray(hb.logs) ? JSON.stringify(hb.logs) : String(hb.logs);
-                    logStr = logStr.replace(/\\/g, '');
-
-                    let match = logStr.match(/current altitude:\s*(\d+(?:\.\d+)?)/i) ||
-                        logStr.match(/data:\s*(\d+(?:\.\d+)?)/i);
-
-                    if (match) {
-                        altitude = parseFloat(match[1]);
+                const entry = await getLogEntry(g);
+                if (entry) {
+                    const s = typeof entry === 'string' ? entry : JSON.stringify(entry);
+                    const m = s.match(/"data"\s*:\s*"([^"]+)"/) || s.match(/data:\s*([^\s,]+)/) || s.match(/altitude:\s*(\d+(?:\.\d+)?)/i);
+                    if (m) {
+                        const val = parseFloat(m[1]);
+                        if (!isNaN(val)) return { win: false, alt: val };
                     }
                 }
-                return { success: false, altitude: altitude };
+                return { win: false, alt: -1 }; // Signals a transient network drop
             };
 
-            let step = 5;
-            let left = 0;
-            let right = maxVal;
-            let bestGuess = -1;
-            let bestAltitude = -1;
-
-            while (left <= right) {
-                let lowProbe = await getAltitude(left);
-                if (lowProbe.success) return { success: true, password: lowProbe.password };
-                if (lowProbe.altitude > bestAltitude) {
-                    bestAltitude = lowProbe.altitude;
-                    bestGuess = left;
-                }
-
-                if (left !== right) {
-                    let highProbe = await getAltitude(right);
-                    if (highProbe.success) return { success: true, password: highProbe.password };
-                    if (highProbe.altitude > bestAltitude) {
-                        bestAltitude = highProbe.altitude;
-                        bestGuess = right;
-                    }
-                }
-
-                if (bestAltitude > 0) break;
-
-                left += step;
-                right -= step;
+            const samples = [];
+            const scanStep = Math.max(1, Math.floor(max / 25));
+            for (let i = 0; i <= max; i += scanStep) {
+                let res = await getAlt(i);
+                if (res.win) return { success: true, password: res.g };
+                samples.push({ guess: i, alt: res.alt });
             }
 
-            if (bestGuess !== -1 && bestAltitude > 0) {
-                step = 5;
-                let trackingValue = bestGuess;
+            samples.sort((a, b) => b.alt - a.alt);
+            const seeds = [];
+            const exclusionZone = max * 0.1;
+
+            for (const s of samples) {
+                if (seeds.length >= 3) break;
+                if (!seeds.some(p => Math.abs(p.guess - s.guess) < exclusionZone)) {
+                    seeds.push(s);
+                }
+            }
+
+            let bestOverallG = seeds[0].guess;
+            let bestOverallAlt = seeds[0].alt;
+
+            for (const seed of seeds) {
+                let curr = seed.guess;
+                let localBestAlt = seed.alt;
+                let step = Math.max(1, Math.floor(max / 50));
 
                 while (step >= 1) {
-                    let forwardTarget = trackingValue + step;
-                    if (forwardTarget <= maxVal) {
-                        let probe = await getAltitude(forwardTarget);
-                        if (probe.success) return { success: true, password: probe.password };
-                        if (probe.altitude > bestAltitude) {
-                            bestAltitude = probe.altitude;
-                            trackingValue = forwardTarget;
-                            continue;
-                        }
+                    let upTarget = curr + step;
+                    let downTarget = curr - step;
+
+                    let upAlt = -1;
+                    let downAlt = -1;
+
+                    // Evaluate the upper slope
+                    if (upTarget <= max) {
+                        let res = await getAlt(upTarget);
+                        if (res.win) return { success: true, password: res.g };
+                        upAlt = res.alt;
                     }
 
-                    let backwardTarget = trackingValue - step;
-                    if (backwardTarget >= 0) {
-                        let probe = await getAltitude(backwardTarget);
-                        if (probe.success) return { success: true, password: probe.password };
-                        if (probe.altitude > bestAltitude) {
-                            bestAltitude = probe.altitude;
-                            trackingValue = backwardTarget;
-                            continue;
-                        }
+                    // Evaluate the lower slope simultaneously
+                    if (downTarget >= 0) {
+                        let res = await getAlt(downTarget);
+                        if (res.win) return { success: true, password: res.g };
+                        downAlt = res.alt;
                     }
 
-                    if (step === 5) step = 1;
-                    else if (step === 1) break;
-                }
-
-                let fallbackStart = Math.max(0, trackingValue - 5);
-                let fallbackEnd = Math.min(maxVal, trackingValue + 5);
-                for (let i = fallbackStart; i <= fallbackEnd; i++) {
-                    let finalStr = i.toString().padStart(kLength, '0');
-                    if ((await ns.dnet.authenticate(hostname, finalStr)).success) return { success: true, password: finalStr };
-                }
-            }
-
-            for (let i = 0; i <= maxVal; i++) {
-                let fallbackStr = i.toString().padStart(kLength, '0');
-                if ((await ns.dnet.authenticate(hostname, fallbackStr)).success) return { success: true, password: fallbackStr };
-            }
-            return { success: false };
-        }
-
-        case "Laika4":
-            const dogGuesses = ["laika", "laika4", "fido", "spot", "rover", "max"];
-            for (const pup of dogGuesses) {
-                if ((await ns.dnet.authenticate(hostname, pup)).success) return { success: true, password: pup };
-                if ((await ns.dnet.authenticate(hostname, pup.toUpperCase())).success) return { success: true, password: pup.toUpperCase() };
-            }
-            return { success: false };
-
-        case "NIL": {
-            let nLen = details.passwordLength || 6;
-            const tFormat = details.passwordFormat || "numeric";
-
-            let pool = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"];
-            if (tFormat === "alphanumeric") {
-                pool = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ".split('');
-            } else if (tFormat === "alphabetic") {
-                pool = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ".split('');
-            }
-
-            let discoveredPassword = Array(nLen).fill(null);
-
-            for (let char of pool) {
-                if (discoveredPassword.every(c => c !== null)) break;
-
-                await ns.dnet.authenticate(hostname, char.repeat(nLen));
-                await ns.sleep(40); 
-
-                let h = await ns.dnet.heartbleed(hostname, { peek: true });
-                if (h && h.logs) {
-                    let logsArr = Array.isArray(h.logs) ? h.logs : [h.logs];
-                    for (let entry of logsArr) {
-                        let entryStr = typeof entry === 'object' ? JSON.stringify(entry) : String(entry);
-                        entryStr = entryStr.replace(/\\/g, '');
-
-                        if (entryStr.includes(`"passwordAttempted":"${char.repeat(nLen)}"`) || entryStr.includes(`passwordAttempted: ${char.repeat(nLen)}`)) {
-                            let dataMatch = entryStr.match(/"data"\s*:\s*"([^"]+)"/) || entryStr.match(/data:\s*([^\s,]+(?:,[^\s,]+)*)/);
-                            if (dataMatch) {
-                                let feedbackArray = dataMatch[1].split(',');
-                                for (let i = 0; i < nLen; i++) {
-                                    if (feedbackArray[i] === "yes") {
-                                        discoveredPassword[i] = char; 
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            let finalGuess = discoveredPassword.map(c => c || pool[0]).join('');
-            if ((await ns.dnet.authenticate(hostname, finalGuess)).success) return { success: true, password: finalGuess };
-            return { success: false };
-        }
-
-        case "(The Labyrinth)": {
-            const opposites = { "north": "south", "south": "north", "east": "west", "west": "east" };
-
-            const visitedNodes = new Map();
-            let trailStack = [];
-            let junctionStack = [];
-
-            try {
-                let checkHb = await ns.dnet.heartbleed(hostname, { peek: true });
-                if (checkHb && checkHb.logs) {
-                    let logStr = JSON.stringify(checkHb.logs);
-                    let reportMatch = logStr.match(/\{"coords":\[\d+,\d+\],.*?\}/);
-                    if (reportMatch) {
-                        let parsedData = JSON.parse(reportMatch[0]);
-                        ns.tryWritePort(19, `[SWARM-PING] Host: ${currentHost} | Node Coordinates: ${parsedData.coords[0]},${parsedData.coords[1]}`);
-                    }
-                }
-            } catch (e) { ns.tryWritePort(14, `[EXCEPTION14] - ${e}`) }
-
-            const saveFile = `maze-${hostname}.txt`;
-            const homeHost = "home";
-
-            if (ns.fileExists(saveFile, homeHost)) {
-                if (ns.scp(saveFile, currentHost, homeHost)) {
-                    try {
-                        let fileContent = ns.read(saveFile);
-                        if (fileContent) {
-                            let parsedData = JSON.parse(fileContent);
-                            junctionStack = parsedData.junctionStack || [];
-                            if (parsedData.visitedNodes) {
-                                for (let [coords, nodeData] of Object.entries(parsedData.visitedNodes)) {
-                                    visitedNodes.set(coords, nodeData);
-                                }
-                            }
-                        }
-                    } catch (e) {
-                        ns.tryWritePort(14, `[MAZE-LOAD-ERROR] Failed parsing state for ${hostname}`);
-                    }
-                }
-            }
-
-            const syncMazeToHome = () => {
-                try {
-                    let payload = {
-                        junctionStack: junctionStack,
-                        visitedNodes: Object.fromEntries(visitedNodes)
-                    };
-                    ns.write(saveFile, JSON.stringify(payload), "w");
-                    ns.scp(saveFile, homeHost, currentHost); 
-                } catch (e) { ns.tryWritePort(14, `[EXCEPTION15] - ${e}`) }
-            };
-
-            let preHb = await ns.dnet.heartbleed(hostname, { peek: true });
-            let preLogStr = preHb && preHb.logs ? JSON.stringify(preHb.logs) : "";
-
-            if (!preLogStr.includes('"data"')) {
-                await ns.dnet.authenticate(hostname, "south");
-                await ns.sleep(60);
-            }
-
-            for (let step = 0; step < 400; step++) {
-                let hb = await ns.dnet.heartbleed(hostname, { peek: true });
-                if (!hb || !hb.logs) break;
-
-                let logsArr = Array.isArray(hb.logs) ? hb.logs : [hb.logs];
-                let rawData = "";
-                let labReportObj = null;
-
-                for (let i = 0; i < logsArr.length; i++) {
-                    let logStr = typeof logsArr[i] === 'object' ? JSON.stringify(logsArr[i]) : String(logsArr[i]);
-                    let m = logStr.match(/"data"\s*:\s*"([^"]+)"/);
-                    if (m) rawData = m[1].replace(/"\/g"/, '');
-
-                    let reportMatch = logStr.match(/\{"coords":\[\d+,\d+\],.*?\}/);
-                    if (reportMatch) {
-                        try {
-                            labReportObj = JSON.parse(reportMatch[0]);
-                        } catch (e) { ns.tryWritePort(14, `[EXCEPTION16] - ${e}`) }
-                    }
-                }
-
-                if (!rawData || !labReportObj) {
-                    await ns.sleep(40);
-                    continue;
-                }
-
-                if (rawData.includes("!!") || !rawData.includes("\\u2588")) {
-                    let finalPass = rawData.trim();
-                    if ((await ns.dnet.authenticate(hostname, finalPass)).success) {
-                        ns.write(saveFile, "", "w");
-                        ns.scp(saveFile, homeHost, currentHost);
-                        return { success: true, password: finalPass };
-                    }
-                }
-
-                let curX = labReportObj.coords[0];
-                let curY = labReportObj.coords[1];
-                let curCoordStr = `${curX},${curY}`;
-
-                if (rawData.includes("Not a valid move") || rawData.includes("wall")) {
-                    ns.tryWritePort(14, `[MAZE-WALL] Collision detected at ${curCoordStr}. Wiping direction vector cache.`);
-                    if (trailStack.length > 0) trailStack.pop();
-                }
-
-                if (!visitedNodes.has(curCoordStr)) {
-                    let allOpenDirs = [];
-                    if (labReportObj.north) allOpenDirs.push("north");
-                    if (labReportObj.south) allOpenDirs.push("south");
-                    if (labReportObj.east) allOpenDirs.push("east");
-                    if (labReportObj.west) allOpenDirs.push("west");
-
-                    let availableDirs = [];
-                    for (let dir of allOpenDirs) {
-                        let tX = curX, tY = curY;
-                        if (dir === "north") tY -= 1;
-                        if (dir === "south") tY += 1;
-                        if (dir === "east") tX += 1;
-                        if (dir === "west") tX -= 1;
-
-                        if (!visitedNodes.has(`${tX},${tY}`)) {
-                            availableDirs.push(dir);
-                        }
+                    // Safeguard: If BOTH paths dropped due to lag (-1), retry without decaying step size
+                    if ((upTarget <= max && upAlt === -1) && (downTarget >= 0 && downAlt === -1)) {
+                        await ns.sleep(50);
+                        continue;
                     }
 
-                    visitedNodes.set(curCoordStr, {
-                        availableDirs: availableDirs,
-                        allOpenDirs: allOpenDirs
-                    });
-
-                    if (allOpenDirs.length > 2 && availableDirs.length > 0) {
-                        junctionStack.push(curCoordStr);
-                    }
-                    syncMazeToHome();
-                }
-
-                let node = visitedNodes.get(curCoordStr);
-
-                if (node.availableDirs.length > 0) {
-                    let nextDir = node.availableDirs.shift();
-                    trailStack.push({ coord: curCoordStr, dir: nextDir });
-                    syncMazeToHome();
-                    await ns.dnet.authenticate(hostname, `go ${nextDir}`);
-                } else {
-                    if (trailStack.length > 0) {
-                        let lastStep = trailStack.pop();
-                        let backDir = opposites[lastStep.dir];
-                        ns.tryWritePort(14, `[MAZE-BACKTRACK] Backtracking from ${curCoordStr} via direction: [${backDir}]`);
-                        await ns.dnet.authenticate(hostname, `go ${backDir}`);
-
-                        if (junctionStack.length > 0 && junctionStack[junctionStack.length - 1] === curCoordStr) {
-                            if (node.availableDirs.length === 0) {
-                                junctionStack.pop();
-                                syncMazeToHome();
-                            }
-                        }
-                    } else if (junctionStack.length > 0) {
-                        let targetJunction = junctionStack[junctionStack.length - 1];
-                        let queue = [[curCoordStr, []]];
-                        let bfsVisited = new Set([curCoordStr]);
-                        let shortcutPath = null;
-
-                        while (queue.length > 0) {
-                            let [curr, path] = queue.shift();
-                            if (curr === targetJunction) {
-                                shortcutPath = path;
-                                break;
-                            }
-                            let memoNode = visitedNodes.get(curr);
-                            if (memoNode) {
-                                for (let dir of memoNode.allOpenDirs) {
-                                    let [bX, bY] = curr.split(',').map(Number);
-                                    if (dir === "north") bY -= 1;
-                                    if (dir === "south") bY += 1;
-                                    if (dir === "east") bX += 1;
-                                    if (dir === "west") bX -= 1;
-                                    let nextNodeStr = `${bX},${bY}`;
-
-                                    if (!bfsVisited.has(nextNodeStr) && visitedNodes.has(nextNodeStr)) {
-                                        bfsVisited.add(nextNodeStr);
-                                        queue.push([nextNodeStr, path.concat({ coord: curr, dir: dir })]);
-                                    }
-                                }
-                            }
-                        }
-
-                        if (shortcutPath && shortcutPath.length > 0) {
-                            let recoveryStep = shortcutPath[0];
-                            trailStack.push(recoveryStep);
-                            await ns.dnet.authenticate(hostname, `go ${recoveryStep.dir}`);
+                    // Steepest Ascent Optimization: March toward the absolute highest peak visible
+                    if (upAlt > localBestAlt || downAlt > localBestAlt) {
+                        if (upAlt >= downAlt) {
+                            localBestAlt = upAlt;
+                            curr = upTarget;
                         } else {
-                            let recoveryJunction = junctionStack.pop();
-                            ns.tryWritePort(14, `[MAZE-RECOVERY] Pathfinder failure at ${curCoordStr}. Resetting routing track to junction: ${recoveryJunction}`);
-                            syncMazeToHome();
-                            break;
+                            localBestAlt = downAlt;
+                            curr = downTarget;
                         }
                     } else {
-                        await ns.dnet.authenticate(hostname, "go north");
-                        break;
+                        // Only decay step size if BOTH directions were verified to be lower ground
+                        step = Math.floor(step / 2);
                     }
                 }
 
-                await ns.sleep(60);
+                if (localBestAlt > bestOverallAlt) {
+                    bestOverallAlt = localBestAlt;
+                    bestOverallG = curr;
+                }
             }
-            return { success: false };
+
+            // Localized micro-brute finish
+            for (let i = Math.max(0, bestOverallG - 5); i <= Math.min(max, bestOverallG + 5); i++) {
+                let res = await getAlt(i);
+                if (res.win) return { success: true, password: res.g };
+            }
+
+            // Return clean failure state with the absolute final failed verification token
+            return { success: false, auth: auth };
         }
 
-        case "Pr0verFl0":
-            let pLength = details.passwordLength || 7;
-            await ns.dnet.authenticate(hostname, "A".repeat(pLength));
-            let pHb = await ns.dnet.heartbleed(hostname, { peek: true });
-            if (pHb && pHb.logs) {
-                let pLogStr = Array.isArray(pHb.logs) ? JSON.stringify(pHb.logs) : String(pHb.logs);
-                pLogStr = pLogStr.replace(/\\/g, '');
-                let prefixMatch = pLogStr.match(/expected '([^\\u25a0']+)/i) || pLogStr.match(/passwordExpected:\s*([^\\u25a0\s]+)/i);
-                let knownPrefix = prefixMatch ? prefixMatch[1] : "";
-                let pool = Array.from(new Set(pLogStr.replace(/[^a-zA-Z0-9]/g, '').split('')));
-                if (knownPrefix && pLength - knownPrefix.length === 3) {
-                    for (let c1 of pool) {
-                        for (let c2 of pool) {
-                            for (let c3 of pool) {
-                                let guess = knownPrefix + c1 + c2 + c3;
-                                if ((await ns.dnet.authenticate(hostname, guess)).success) return { success: true, password: guess };
-                            }
+        case "Laika4": {
+            for (const dog of ["laika", "fido", "spot", "rover", "max", "buddy"]) {
+                // Capture tracking object on lowercase variant
+                auth = await ns.dnet.authenticate(hostname, dog);
+                if (auth.success) return { success: true, password: dog };
+
+                // Capture tracking object on uppercase variant
+                auth = await ns.dnet.authenticate(hostname, dog.toUpperCase());
+                if (auth.success) return { success: true, password: dog.toUpperCase() };
+            }
+            return { success: false, auth: auth };
+        }
+
+        case "NIL": {
+            const len = details.passwordLength || 6, format = details.passwordFormat || "numeric";
+            let pool = "0123456789".split("");
+            if (format === "alphanumeric") pool = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ".split("");
+            else if (format === "alphabetic") pool = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ".split("");
+            let res = Array(len).fill(null);
+
+            for (const char of pool) {
+                const g = char.repeat(len);
+
+                // Telemetry Capture 1: Bind character mask checks to the matrix frame
+                auth = await ns.dnet.authenticate(hostname, g);
+                if (auth.success) return { success: true, password: g };
+
+                const entry = await getLogEntry(g);
+                if (entry) {
+                    const s = (typeof entry === 'string' ? entry : JSON.stringify(entry)).replace(/\\/g, '');
+                    const m = s.match(/"data"\s*:\s*"([^"]+)"/) || s.match(/data:\s*([^\s,]+)/);
+                    if (m) {
+                        let feedback = m[1].split(",");
+                        for (let i = 0; i < len; i++) if (feedback[i] === "yes") res[i] = char;
+                    }
+                }
+                if (res.every(x => x !== null)) break;
+            }
+
+            const final = res.map(x => x || pool[0]).join("");
+
+            // Telemetry Capture 2: Capture the absolute final composite password guess
+            auth = await ns.dnet.authenticate(hostname, final);
+            if (auth.success) return { success: true, password: final };
+
+            // Propagate the unredacted failure token up to your JSON stringifier
+            return { success: false, auth: auth };
+        }
+
+        case "Pr0verFl0": {
+            const len = details.passwordLength || 7;
+
+            // Telemetry Capture 1: Capture initial exploit memory-leak probe
+            auth = await ns.dnet.authenticate(hostname, "A".repeat(len));
+
+            const entry = await getLogEntry("A".repeat(len));
+            if (entry) {
+                const s = (typeof entry === 'string' ? entry : JSON.stringify(entry)).replace(/\\/g, '');
+                const m = s.match(/expected '([^■']+)/i) || s.match(/passwordExpected:\s*([^■\s]+)/i);
+                if (m) {
+                    const prefix = m[1], pool = Array.from(new Set(s.replace(/[^a-zA-Z0-9]/g, '').split('')));
+                    if (len - prefix.length === 3) {
+                        for (let c1 of pool) for (let c2 of pool) for (let c3 of pool) {
+                            let g = prefix + c1 + c2 + c3;
+
+                            // Telemetry Capture 2: Capture combination matrix brute attempts
+                            auth = await ns.dnet.authenticate(hostname, g);
+                            if (auth.success) return { success: true, password: g };
                         }
                     }
                 }
             }
-            let fallbackGuess = "A".repeat(pLength + 8);
-            return { success: (await ns.dnet.authenticate(hostname, fallbackGuess)).success, password: fallbackGuess };
+
+            // Telemetry Capture 3: Capture the definitive parameter overflow fallback crash attempt
+            auth = await ns.dnet.authenticate(hostname, "A".repeat(len + 8));
+            if (auth.success) return { success: true, password: "A".repeat(len + 8) };
+
+            // Propagate the overflow failure token clean to the stringifier
+            return { success: false, auth: auth };
+        }
 
         case "OpenWebAccessPoint": {
-            let owLen = details.passwordLength || 4;
-            const owFormat = details.passwordFormat || "alphabetic";
+            const len = details.passwordLength || 4;
 
-            const agitationSeeds = ["admin", "password", "guest", "123456789"].map(w => w.slice(0, owLen));
-            if (owFormat === "numeric") agitationSeeds.push("9".repeat(owLen), "0".repeat(owLen));
+            // Initial fallback message in case log matching fails on all vectors
+            auth = { message: "no successful leak extraction achieved", model: "OpenWebAccessPoint" };
 
-            for (let seed of agitationSeeds) {
-                let authRes = await ns.dnet.authenticate(hostname, seed);
-                if (authRes.success) return { success: true, password: seed };
+            for (const seed of ["admin", "password", "guest", "1234", "0000", "9999"]) {
+                const g = seed.slice(0, len);
 
-                await ns.sleep(40);
+                // Telemetry Capture 1: Track initial base seed authentication probes
+                auth = await ns.dnet.authenticate(hostname, g);
+                if (auth.success) return { success: true, password: g };
 
-                let hStream = await ns.dnet.heartbleed(hostname, { peek: true });
-                if (hStream && hStream.logs) {
-                    let logsArr = Array.isArray(hStream.logs) ? hStream.logs : [hStream.logs];
+                const entry = await getLogEntry(g);
+                if (entry) {
+                    const s = typeof entry === 'string' ? entry : JSON.stringify(entry);
+                    const m = s.match(/"data"\s*:\s*"([^"]+)"/);
+                    if (m) {
+                        const data = m[1], sig = `${hostname}:`, idx = data.indexOf(sig);
+                        if (idx !== -1) {
+                            const p = data.substr(idx + sig.length, len);
 
-                    for (let logEntry of logsArr) {
-                        let logStr = typeof logEntry === 'object' ? JSON.stringify(logEntry) : String(logEntry);
-                        let dataMatch = logStr.match(/"data"\s*:\s*"([^"]+)"/);
+                            // Telemetry Capture 2: Track signature-targeted password string extraction
+                            auth = await ns.dnet.authenticate(hostname, p);
+                            if (auth.success) return { success: true, password: p };
+                        }
+                        for (let i = 0; i <= data.length - len; i++) {
+                            const sub = data.substr(i, len);
 
-                        if (dataMatch) {
-                            let rawDataStr = dataMatch[1];
-
-                            let signature = `${hostname}:`;
-                            let sigIdx = rawDataStr.indexOf(signature);
-                            if (sigIdx !== -1) {
-                                let potentialPassword = rawDataStr.substr(sigIdx + signature.length, owLen);
-
-                                let isValid = false;
-                                if (owFormat === "numeric" && /^\d+$/.test(potentialPassword)) isValid = true;
-                                if (owFormat === "alphabetic" && /^[a-zA-Z]+$/.test(potentialPassword)) isValid = true;
-                                if (owFormat === "alphanumeric" && /^[a-zA-Z0-9]+$/.test(potentialPassword)) isValid = true;
-
-                                if (isValid) {
-                                    if ((await ns.dnet.authenticate(hostname, potentialPassword)).success) {
-                                        return { success: true, password: potentialPassword };
-                                    }
-                                }
-                            }
-
-                            for (let i = 0; i <= rawDataStr.length - owLen; i++) {
-                                let sub = rawDataStr.substr(i, owLen);
-                                let isValid = false;
-                                if (owFormat === "numeric" && /^\d+$/.test(sub)) isValid = true;
-                                if (owFormat === "alphabetic" && /^[a-zA-Z]+$/.test(sub)) isValid = true;
-                                if (owFormat === "alphanumeric" && /^[a-zA-Z0-9]+$/.test(sub)) isValid = true;
-
-                                if (isValid) {
-                                    if ((await ns.dnet.authenticate(hostname, sub)).success) {
-                                        return { success: true, password: sub };
-                                    }
-                                }
-                            }
+                            // Telemetry Capture 3: Track complete data block sliding-window brute tries
+                            auth = await ns.dnet.authenticate(hostname, sub);
+                            if (auth.success) return { success: true, password: sub };
                         }
                     }
                 }
             }
-            return { success: false };
+            return { success: false, auth: auth };
         }
 
         case "OctantVoxel": {
-            let baseStr = "";
-            let numStr = "";
+            // Seed a default error signature in case metadata parsing requirements are missed
+            auth = { message: "Radix parameters could not be extracted from metadata", model: "OctantVoxel" };
 
+            let base = 0, num = "";
             if (details.data && String(details.data).includes(',')) {
-                let parts = String(details.data).split(',');
-                baseStr = parts[0];
-                numStr = parts[1];
-            } else if (details.passwordHint) {
-                let voxelMatch = details.passwordHint.match(/base\s+(\d+(:\.\d+)?)\s+number\s+([a-fA-F0-9.]+)/i);
-                if (voxelMatch) {
-                    baseStr = voxelMatch[1];
-                    numStr = voxelMatch[2];
-                }
+                let p = String(details.data).split(','); base = parseFloat(p[0]); num = p[1];
+            } else {
+                let m = (details.passwordHint || "").match(/base\s+(\d+(?:\.\d+)?)\s+number\s+([a-fA-F0-9.]+)/i);
+                if (m) { base = parseFloat(m[1]); num = m[2]; }
             }
 
-            if (baseStr && numStr) {
-                const baseVal = parseFloat(baseStr);
-                const numParts = numStr.split('.');
-                const intPart = numParts[0];
-                const fracPart = numParts[1] || "";
+            if (base && num) {
+                let [int, frac] = num.split('.'), sum = 0;
+                for (let i = 0; i < int.length; i++) sum += parseInt(int[int.length - 1 - i], 36) * Math.pow(base, i);
+                if (frac) for (let i = 0; i < frac.length; i++) sum += parseInt(frac[i], 36) * Math.pow(base, -(i + 1));
+                const p = Math.round(sum).toString();
 
-                let accumulatedSum = 0.0;
-
-                for (let i = 0; i < intPart.length; i++) {
-                    let char = intPart[intPart.length - 1 - i];
-                    let digitValue = parseInt(char, 36);
-                    accumulatedSum += digitValue * Math.pow(baseVal, i);
-                }
-
-                for (let i = 0; i < fracPart.length; i++) {
-                    let char = fracPart[i];
-                    let digitValue = parseInt(char, 36);
-                    accumulatedSum += digitValue * Math.pow(baseVal, -(i + 1));
-                }
-
-                let finalPassword = Math.round(accumulatedSum).toString();
-                if ((await ns.dnet.authenticate(hostname, finalPassword)).success) {
-                    return { success: true, password: finalPassword };
-                }
+                // Telemetry Capture: Track the final base-converted password authentication attempt
+                auth = await ns.dnet.authenticate(hostname, p);
+                if (auth.success) return { success: true, password: p };
             }
-            return { success: false };
+
+            return { success: false, auth: auth };
         }
 
         case "DeepGreen": {
-            let dgLen = details.passwordLength || 3;
-            const tFormat = details.passwordFormat || "numeric";
+            const len = details.passwordLength || 3;
+            const format = details.passwordFormat || "numeric";
+
             let pool = "0123456789";
-            if (tFormat === "alphanumeric") {
-                pool = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
-            } else if (tFormat === "alphabetic") {
-                pool = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
-            }
-            const clues = [];
-            const checkCandidate = (cand) => {
-                for (const clue of clues) {
-                    let exact = 0, wrong = 0;
-                    let cArr = cand.split(""), gArr = clue.guess.split("");
-                    for (let j = 0; j < dgLen; j++) {
-                        if (cArr[j] === gArr[j]) { exact++; cArr[j] = null; gArr[j] = null; }
-                    }
-                    for (let j = 0; j < dgLen; j++) {
-                        if (gArr[j] !== null) {
-                            let idx = cArr.indexOf(gArr[j]);
-                            if (idx !== -1) { wrong++; cArr[idx] = null; }
-                        }
-                    }
-                    if (exact !== clue.exact || wrong !== clue.wrong) return false;
-                }
-                return true;
-            };
-            let yieldCounter = 0;
-            const findNextCandidate = async (prefix) => {
-                if (prefix.length === dgLen) {
-                    return checkCandidate(prefix) ? prefix : null;
-                }
-                for (let i = 0; i < pool.length; i++) {
-                    yieldCounter++;
-                    if (yieldCounter % 5000 === 0) await ns.sleep(0);
-                    let res = await findNextCandidate(prefix + pool[i]);
-                    if (res) return res;
-                }
-                return null;
-            };
-            let mastermindRuns = 0;
-            let currentGuess = pool[0].repeat(dgLen);
-            while (mastermindRuns < 120) {
-                mastermindRuns++;
-                const res = await ns.dnet.authenticate(hostname, currentGuess);
-                if (res.success) return { success: true, password: currentGuess };
-                let targetExact = null, targetWrong = null, lStr = "", guesses = 0;
-                while (guesses < 15) {
-                    await ns.sleep(40);
-                    let h = await ns.dnet.heartbleed(hostname, { peek: true });
-                    lStr = Array.isArray(h?.logs) ? JSON.stringify(h.logs) : String(h?.logs || "");
-                    lStr = lStr.replace(/\\/g, "");
-                    if (lStr.includes(`"passwordAttempted":"${currentGuess}"`) || lStr.includes(`passwordAttempted: ${currentGuess}`)) break;
-                    guesses++;
-                }
-                let dMatch = lStr.match(/"data"\s*:\s*"(\d+),(\d+)"/) || lStr.match(/data:\s*(\d+),(\d+)/);
-                if (dMatch) {
-                    targetExact = parseInt(dMatch[1], 10);
-                    targetWrong = parseInt(dMatch[2], 10);
-                    clues.push({ guess: currentGuess, exact: targetExact, wrong: targetWrong });
-                }
-                yieldCounter = 0;
-                let nextCand = await findNextCandidate("");
-                if (!nextCand) break;
-                currentGuess = nextCand;
-            }
-            return { success: false };
-        }
+            if (format === "alphabetic") pool = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+            if (format === "alphanumeric") pool += "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
 
-        case "PHP 5.4":
-            let phpDigits = (details.data || details.passwordHint || "").replace(/[^0-9]/g, "");
-            if (phpDigits.length > 0) {
-                const generatePermutations = (str) => {
-                    if (str.length <= 1) return [str];
-                    let out = [];
-                    for (let i = 0; i < str.length; i++) {
-                        let char = str[i];
-                        let rem = str.slice(0, i) + str.slice(i + 1);
-                        for (let sub of generatePermutations(rem)) {
-                            out.push(char + sub);
-                        }
-                    }
-                    return Array.from(new Set(out));
-                };
-                for (let p of generatePermutations(phpDigits)) {
-                    if ((await ns.dnet.authenticate(hostname, p)).success) return { success: true, password: p };
-                }
-            }
-            return { success: false };
+            let guessArr = Array(len).fill(pool[0]);
 
-        case "OrdoXenos":
-            let cipherText = "";
-            let maskPool = [];
-            let oData = details.data || "";
-            if (oData.includes(";")) {
-                let parts = oData.split(";");
-                cipherText = parts[0];
-                maskPool = parts[1].split(" ").map(b => parseInt(b, 2));
-            }
-            if (cipherText && maskPool.length >= cipherText.length) {
-                let decrypted = "";
-                for (let i = 0; i < cipherText.length; i++) {
-                    decrypted += String.fromCharCode(cipherText.charCodeAt(i) ^ maskPool[i]);
-                }
-                if ((await ns.dnet.authenticate(hostname, decrypted)).success) return { success: true, password: decrypted };
-            }
-            let maskStr = details.passwordHint.match(/"([^"]+)"/);
-            if (maskStr) {
-                let encrypted = maskStr[1];
-                for (let key = 1; key < 256; key++) {
-                    let decrypted = "";
-                    for (let i = 0; i < encrypted.length; i++) String.fromCharCode(encrypted.charCodeAt(i) ^ key);
-                    if ((await ns.dnet.authenticate(hostname, decrypted)).success) return { success: true, password: decrypted };
-                }
-            }
-            return { success: false };
-
-        case "PrimeTime 2":
-            let numMatch = details.passwordHint.match(/\d+/);
-            if (numMatch) {
-                let num = parseInt(numMatch[0], 10), divisor = 2;
-                while (divisor * divisor <= num) { if (num % divisor === 0) num /= divisor; else divisor++; }
-                let pw = num.toString();
-                if ((await ns.dnet.authenticate(hostname, pw)).success) return { success: true, password: pw };
-            }
-            return { success: false };
-
-        case "110100100":
-            let binarySource = details.data || "";
-            if (!binarySource) {
-                let hb = await ns.dnet.heartbleed(hostname, { peek: true });
-                if (hb && hb.logs) {
-                    let logStr = Array.isArray(hb.logs) ? JSON.stringify(hb.logs) : String(hb.logs);
-                    let m = logStr.match(/"data"\s*:\s*"([^"]+)"/) || logStr.match(/data:\s*([01\s]+)/);
-                    if (m) binarySource = m[1];
-                }
-            }
-            if (binarySource && binarySource.includes(" ")) {
-                let decodedText = binarySource.split(" ").map(b => String.fromCharCode(parseInt(b, 2))).join("");
-                if ((await ns.dnet.authenticate(hostname, decodedText)).success) return { success: true, password: decodedText };
-            }
-            let fallbackPw = parseInt(details.modelId, 2).toString();
-            return { success: (await ns.dnet.authenticate(hostname, fallbackPw)).success, password: fallbackPw };
-
-        case "EuroZone Free": {
-            const euCountries = [
-                "albania", "andorra", "andorra la vella", "austria", "balgariya", "belarus",
-                "belgien", "belgique", "belgium", "belgi\u00eb", "belorussia", "bih",
-                "bosna i hercegovina", "bosnia", "bosnia & herzegovina", "bosnia and hercegovina",
-                "bosnia-herzegovina", "brd", "britain", "bssr", "bulgaria", "bulgariya",
-                "byelorussia", "ceska republika", "cesko", "ch", "citta del vaticano",
-                "confoederatio helvetica", "conf\u0153deratio helvetica", "crna gora", "croatia",
-                "croatie", "cyprus", "czech republic", "czechia", "czechoslovakia", "danmark",
-                "denmark", "deutschland", "east germany", "eesti", "eesti vabariik", "eire",
-                "ellada", "elliniki dimokratia", "espana", "espa\u00f1a", "estonia",
-                "federal republic of germany", "finland", "france", "french republic", "frg",
-                "fuerstentum liechtenstein", "fyrom", "f\u00fcrstentum liechtenstein", "gb", "georgia",
-                "germany", "grand duchy of luxembourg", "grand-duche de luxembourg",
-                "grand-duch\u00e9 de luxembourg", "great britain", "great britain & ni", "greece",
-                "gro\u00dfherzogtum luxemburg", "gruziya", "hellas", "hellenic republic", "holland",
-                "hrvatska", "hrvatska republika", "hungarian republic", "hungary", "iceland",
-                "ireland", "irish free state", "island", "italia", "italian republic", "italy",
-                "kazakhstan", "kazakstan", "kibris", "kingdom of belgium", "kingdom of denmark",
-                "kingdom of greece", "kingdom of norway", "kingdom of sweden", "kingdom of the netherlands",
-                "kongeriget danmark", "koninkrijk belgi\u00eb", "konungariket sverige", "kosova",
-                "kosovo", "kosovo i metohija", "kroatien", "kypros", "k\u00f6nigreich belgien",
-                "k\u00f6nigreich spanien", "la france", "latvia", "latvija", "latvijas republika",
-                "letzebuerg", "liechtenstein", "lietuva", "lietuvos respublika", "lithuania",
-                "luxembourg", "lydveldid island", "l\u00ebtzebuerg", "l\u00fd\u00f0veldi\u00f0 \u00edsland", "macedonia",
-                "magyarorszag", "malta", "moldavia", "moldova", "monaco", "montenegro",
-                "most serene republic of san marino", "nederland", "netherlands", "noreg", "norge",
-                "north macedonia", "norway", "oesterreich", "osterreich", "people's socialist republic of albania",
-                "peoples socialist republic of albania", "poblacht na heireann", "poblacht na h\u00e9ireann",
-                "poland", "polska", "portugal", "principality andorra", "principality monaco",
-                "principality of andorra", "principality of liechtenstein", "principality of monaco",
-                "principante de monaco", "principalt d'andorra", "principat d'andorra",
-                "principat dandorra", "qazaqstan", "reino de espana", "reino de espa\u00f1a",
-                "repubblica di san marino", "repubblica italiana", "repubblika ta malta",
-                "repubblika ta' malta", "republic of albania", "republic of andorra",
-                "republic of austria", "republic of belarus", "republic of croatia",
-                "republic of cyprus", "republic of eire", "republic of estonia",
-                "republic of france", "republic of germany", "republic of greece",
-                "republic of hungary", "republic of iceland", "republic of ireland",
-                "republic of italy", "republic of kosovo", "republic of latvia",
-                "republic of luxembourg", "republic of malta", "republic of moldova",
-                "republic of north macedonia", "republic of poland", "republic of san marino",
-                "republic of serbia", "republic of spain", "republic of turkey",
-                "republic of turkiye", "republic of t\u00fcrkiye", "republic of ukraine",
-                "republica moldova", "republica portuguesa", "republik \u00f6sterreich",
-                "republika e shqip\u00ebris\u00eb", "republika slovenija", "republika srbija",
-                "republiken finland", "republik bulgarien", "republik slowenien",
-                "rep\u00fablica portuguesa", "romania", "rom\u00e2nia", "rossiya", "rossiyskaya federatsiya",
-                "roumania", "royaume de belgique", "rumania", "russia", "russian federation",
-                "rzeczpospolita polska", "r\u00e9publique fran\u00e7aise", "sakartvelo", "san marino",
-                "san marino republic", "schweiz", "serbia", "severna makedonija", "shqiperi",
-                "shqiperia", "shqip\u00ebri", "shqip\u00ebria", "slovak republic", "slovakia",
-                "slovenia", "slovenija", "slovenska republika", "slovensko", "slovensk\u00e1 republika",
-                "southern cyprus", "southern ireland", "soviet union", "spain", "srbija",
-                "state of vatican city", "status civitatis vaticanae", "suisse", "suomen tasavalta",
-                "suomi", "sverige", "svizzera", "sweden", "swiss confederation", "switzerland",
-                "the czech republic", "the federal republic", "the french republic", "the holy see",
-                "the holy see vatican", "the irish free state", "the kingdom of spain",
-                "the russian empire", "the slovak republic", "the swiss federation", "the ukraine",
-                "the united kingdom", "the vatican", "turkey", "turkiye", "turkiye cumhuriyeti",
-                "t\u00fcrkiye", "t\u00fcrkiye cumhuriyeti", "ukraina", "ukraine", "ukrayina", "united kingdom",
-                "united kingdom of gb", "united kingdom of great britain and northern ireland",
-                "ussr", "vatican", "vatican city", "vatican city state", "west germany",
-                "white russia", "yugoslavia", "\u00e9ire", "\u00edsland", "\u00f6sterreich", "\u010desko", "\u010desk\u00e1 republika",
-                "gibraltar", "faroe islands", "faeroe islands", "isle of man", "greenland",
-                "guernsey", "jersey", "svalbard", "aland", "\u00e5land", "england", "scotland", "wales",
-                "northern ireland", "armenia", "azerbaijan", "republic of armenia", "republic of azerbaijan",
-                "akrotiri and dhekelia", "akrotiri", "dhekelia", "transnistria", "abkhazia", "south ossetia",
-                "northern cyprus", "turkish republic of northern cyprus"
-            ];
-
-            let tLen = details.passwordLength || 5;
-            let filteredCountries = euCountries.filter(c => c.length === tLen);
-
-            for (let country of filteredCountries) {
-                const uniqueGuesses = new Set();
-
-                const lowercaseWords = ["of", "del", "de", "the", "and", "da", "dandorra", "&"];
-                let grammaticalTitle = country.split(' ').map((w, index) => {
-                    if (index > 0 && lowercaseWords.includes(w.toLowerCase())) {
-                        return w.toLowerCase();
-                    }
-                    return w.charAt(0).toUpperCase() + w.slice(1);
-                }).join(' ');
-                uniqueGuesses.add(grammaticalTitle);
-
-                let wordTitle = country.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
-                uniqueGuesses.add(wordTitle);
-
-                let hyphenTitle = country.split('-').map(part => part.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')).join('-');
-                uniqueGuesses.add(hyphenTitle);
-
-                uniqueGuesses.add(country);
-                uniqueGuesses.add(country.toUpperCase());
-
-                for (let guess of uniqueGuesses) {
-                    if ((await ns.dnet.authenticate(hostname, guess)).success) {
-                        return { success: true, password: guess };
-                    }
-                }
-            }
-            return { success: false };
-        }
-
-        case "BigMo%od": {
-            const primes = [2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31];
-            let moduli = [];
-            let remainders = [];
-
-            for (let p of primes) {
-                let pStr = p.toString();
-                let authRes = await ns.dnet.authenticate(hostname, pStr);
-                if (authRes.success) return { success: true, password: pStr };
-
-                await ns.sleep(40);
-                let hb = await ns.dnet.heartbleed(hostname, { peek: true });
-                if (hb && hb.logs) {
-                    let logsArr = Array.isArray(hb.logs) ? hb.logs : [hb.logs];
-                    let foundRem = null;
-
-                    for (let i = logsArr.length - 1; i >= 0; i--) {
-                        let logStr = typeof logsArr[i] === 'object' ? JSON.stringify(logsArr[i]) : String(logsArr[i]);
-                        logStr = logStr.replace(/\\/g, '');
-
-                        if (logStr.includes(`"passwordAttempted":"${pStr}"`) || logStr.includes(`passwordAttempted: ${pStr}`) || logStr.includes(`passwordAttempted: ${p}`)) {
-                            let m = logStr.match(/"data"\s*:\s*"(\d+)"/) || logStr.match(/"data"\s*:\s*(\d+)/) || logStr.match(/data:\s*(\d+)/);
-                            if (m) {
-                                foundRem = parseInt(m[1], 10);
-                                break;
+            const getExactCount = async (currentStr) => {
+                await ns.sleep(30);
+                const bleed = await ns.dnet.heartbleed(hostname);
+                if (bleed && bleed.logs && bleed.logs.length > 0) {
+                    for (let i = bleed.logs.length - 1; i >= 0; i--) {
+                        const logObj = JSON.parse(bleed.logs[i]);
+                        if (logObj.passwordAttempted === currentStr) {
+                            if (logObj.data && typeof logObj.data === "string") {
+                                return parseInt(logObj.data.split(",")[0], 10) || 0;
                             }
                         }
                     }
-
-                    if (foundRem !== null) {
-                        moduli.push(BigInt(p));
-                        remainders.push(BigInt(foundRem));
-                    }
                 }
-            }
+                return 0;
+            };
 
-            if (moduli.length > 0) {
-                let N = 1n;
-                for (let m of moduli) N *= m;
+            auth = await ns.dnet.authenticate(hostname, guessArr.join(""));
+            if (auth.success) return { success: true, password: guessArr.join("") };
+            let currentExact = await getExactCount(guessArr.join(""));
 
-                let result = 0n;
-                for (let i = 0; i < moduli.length; i++) {
-                    let ni = moduli[i];
-                    let ri = remainders[i];
-                    let Ni = N / ni;
+            for (let pos = 0; pos < len; pos++) {
+                const originalChar = guessArr[pos];
 
-                    let inv = 0n;
-                    for (let j = 1n; j < ni; j++) {
-                        if ((Ni * j) % ni === 1n) {
-                            inv = j;
-                            break;
-                        }
-                    }
-                    result += ri * Ni * inv;
-                }
+                for (let pIdx = 1; pIdx < pool.length; pIdx++) {
+                    guessArr[pos] = pool[pIdx];
+                    const currentStr = guessArr.join("");
 
-                let finalPassword = (result % N).toString();
+                    auth = await ns.dnet.authenticate(hostname, currentStr);
+                    if (auth.success) return { success: true, password: currentStr };
 
-                let bmLen = details.passwordLength;
-                if (bmLen && finalPassword.length < bmLen) {
-                    finalPassword = finalPassword.padStart(bmLen, '0');
-                }
+                    const newExact = await getExactCount(currentStr);
 
-                if ((await ns.dnet.authenticate(hostname, finalPassword)).success) return { success: true, password: finalPassword };
-            }
-            return { success: false };
-        }
-
-        case "2G_cellular": {
-            let cellLen = details.passwordLength || 6;
-            const cellPool = details.passwordFormat === "numeric" ? "0123456789" : "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
-            let cellGuess = Array(cellLen).fill(cellPool[0]);
-
-            for (let pos = 0; pos < cellLen; pos++) {
-                for (let cIdx = 0; cIdx < cellPool.length; cIdx++) {
-                    cellGuess[pos] = cellPool[cIdx];
-                    let guessStr = cellGuess.join('');
-
-                    if ((await ns.dnet.authenticate(hostname, guessStr)).success) return { success: true, password: guessStr };
-
-                    let mismatchIdx = null;
-                    let guesses = 0;
-                    while (guesses < 15) {
-                        await ns.sleep(40);
-                        let hb = await ns.dnet.heartbleed(hostname, { peek: true });
-                        if (hb && hb.logs) {
-                            let logsArr = Array.isArray(hb.logs) ? hb.logs : [hb.logs];
-                            let logFound = false;
-
-                            for (let i = 0; i < logsArr.length; i++) {
-                                let logStr = typeof logsArr[i] === 'object' ? JSON.stringify(logsArr[i]) : String(logsArr[i]);
-                                if (logStr.includes(`"passwordAttempted":"${guessStr}"`) || logStr.includes(`passwordAttempted: ${guessStr}`)) {
-                                    logFound = true;
-                                    let match = logStr.match(/checking each character \((\d+)\)/i);
-                                    if (match) {
-                                        mismatchIdx = parseInt(match[1], 10);
-                                        break;
-                                    }
-                                }
-                            }
-                            if (logFound) break;
-                        }
-                        guesses++;
-                    }
-
-                    if (mismatchIdx !== null && mismatchIdx > pos) {
+                    if (newExact > currentExact) {
+                        currentExact = newExact;
+                        break;
+                    } else if (newExact < currentExact) {
+                        guessArr[pos] = originalChar;
                         break;
                     }
                 }
             }
-            return { success: (await ns.dnet.authenticate(hostname, cellGuess.join(''))).success, password: cellGuess.join('') };
+
+            return { success: false, auth: auth };
         }
 
-        case "MathML":
+        case "PHP 5.4": {
+            // Seed a secure structural fallback in case no digit tokens exist in metadata
+            auth = { message: "No digits extracted from metadata pool", model: "PHP 5.4" };
+
+            let digits = (details.data || details.passwordHint || "").replace(/\D/g, "");
+            if (digits) {
+                const perm = (s) => {
+                    if (s.length <= 1) return [s];
+                    let res = [];
+                    for (let i = 0; i < s.length; i++) {
+                        for (let p of perm(s.slice(0, i) + s.slice(i + 1))) res.push(s[i] + p);
+                    }
+                    return Array.from(new Set(res));
+                };
+
+                for (let p of perm(digits)) {
+                    // Telemetry Capture: Trap the specific permutation matrix try
+                    auth = await ns.dnet.authenticate(hostname, p);
+                    if (auth.success) return { success: true, password: p };
+                }
+            }
+
+            return { success: false, auth: auth };
+        }
+
+        case "OrdoXenos": {
+            // Seed baseline for structural validation safety
+            auth = { message: "Metadata delimiter missing or unformatted", model: "OrdoXenos" };
+
+            let data = details.data || "";
+            if (data.includes(";")) {
+                let [cipher, masks] = data.split(";"), mPool = masks.split(" ").map(b => parseInt(b, 2));
+                let res = ""; for (let i = 0; i < cipher.length; i++) res += String.fromCharCode(cipher.charCodeAt(i) ^ mPool[i]);
+                auth = await ns.dnet.authenticate(hostname, res);
+                if (auth.success) return { success: true, password: res };
+            }
+            return { success: false, auth: auth };
+        }
+
+        case "PrimeTime 2": {
+            // Seed baseline for structural validation safety
+            auth = { message: "No numeric sequences located within hint buffer", model: "PrimeTime 2" };
+
+            let m = (details.passwordHint || "").match(/\d+/);
+            if (m) {
+                let n = parseInt(m[0]), d = 2;
+                while (d * d <= n) { if (n % d === 0) n /= d; else d++; }
+                auth = await ns.dnet.authenticate(hostname, n.toString());
+                if (auth.success) return { success: true, password: n.toString() };
+            }
+            return { success: false, auth: auth };
+        }
+
+        case "110100100": {
+            // Seed baseline for structural validation safety
+            auth = { message: "Binary sequence empty or improperly delimited", model: "110100100" };
+
+            let bin = details.data || "";
+            if (!bin) {
+                let hb = await ns.dnet.heartbleed(hostname, { peek: true });
+                if (hb && hb.logs) {
+                    const logStr = JSON.stringify(hb.logs);
+                    bin = (logStr.match(/"data"\s*:\s*"([^"]+)"/) || [])[1] || "";
+                }
+            }
+            if (bin && bin.includes(" ")) {
+                let res = bin.split(" ").map(b => String.fromCharCode(parseInt(b, 2))).join("");
+                auth = await ns.dnet.authenticate(hostname, res);
+                if (auth.success) return { success: true, password: res };
+            }
+            return { success: false, auth: auth };
+        }
+
+        case "BigMo%od": {
+            const len = details.passwordLength || 4;
+            const mods = [2n, 3n, 5n, 7n, 11n, 13n, 17n, 19n, 23n, 29n, 31n];
+            const rems = [];
+
+            for (const p of mods) {
+                const pStr = p.toString().padStart(len, '0');
+
+                auth = await ns.dnet.authenticate(hostname, pStr);
+                if (auth.success) return { success: true, password: pStr };
+
+                await ns.sleep(30);
+                const bleed = await ns.dnet.heartbleed(hostname);
+                if (bleed && bleed.logs && bleed.logs.length > 0) {
+                    let matchFound = false;
+                    for (let i = bleed.logs.length - 1; i >= 0; i--) {
+                        const logObj = JSON.parse(bleed.logs[i]);
+                        if (logObj.passwordAttempted === pStr) {
+                            rems.push(BigInt(logObj.data));
+                            matchFound = true;
+                            break;
+                        }
+                    }
+                    if (!matchFound) return { success: false, auth: auth };
+                } else {
+                    return { success: false, auth: auth };
+                }
+            }
+
+            const N = mods.reduce((a, b) => a * b, 1n);
+            let res = 0n;
+
+            for (let i = 0; i < mods.length; i++) {
+                const Ni = N / mods[i];
+                let inv = 0n;
+                for (let j = 1n; j < mods[i]; j++) {
+                    if ((Ni * j) % mods[i] === 1n) {
+                        inv = j;
+                        break;
+                    }
+                }
+                res += rems[i] * Ni * inv;
+            }
+
+            const finalAns = res % N;
+            const paddedPassword = finalAns.toString().padStart(len, '0');
+
+            auth = await ns.dnet.authenticate(hostname, paddedPassword);
+            if (auth.success) return { success: true, password: paddedPassword };
+
+            return { success: false, auth: auth };
+        }
+
+        case "2G_cellular": {
+            const len = details.passwordLength || 6, pool = "0123456789abcdefghijklmnopqrstuvwxyz";
+            let g = Array(len).fill(pool[0]);
+
+            // Seed baseline for structural validation safety
+            auth = { message: "Pinning loop completed without matching length requirements", model: "2G_cellular" };
+
+            for (let i = 0; i < len; i++) {
+                for (let j = 0; j < pool.length; j++) {
+                    g[i] = pool[j];
+                    const currentGuess = g.join('');
+
+                    // Telemetry Capture 1: Capture index pinning attempts
+                    auth = await ns.dnet.authenticate(hostname, currentGuess);
+                    if (auth.success) return { success: true, password: currentGuess };
+
+                    let entry = await getLogEntry(currentGuess);
+                    if (entry) {
+                        let s = typeof entry === 'string' ? entry : JSON.stringify(entry);
+                        let m = s.match(/character \((\d+)\)/i);
+                        // If the server confirms it parsed deeper than our current index, lock the slot and advance
+                        if (m && parseInt(m[1]) > i) break;
+                    }
+                }
+            }
+
+            const finalGuess = g.join('');
+            // Telemetry Capture 2: Capture final fallback verification pass
+            auth = await ns.dnet.authenticate(hostname, finalGuess);
+            if (auth.success) return { success: true, password: finalGuess };
+
+            return { success: false, auth: auth };
+        }
+
+        case "MathML": {
+            // Seed a secure structural fallback in case data parsing or regex safety validation fails
+            auth = { message: "MathML evaluation bypassed or format validation failed", model: "MathML" };
+
             if (details.data) {
                 try {
-                    let cleanExpr = String(details.data).split(',')[0];
-
-                    cleanExpr = cleanExpr.replace(/\u04b3/g, '*')
+                    let cleanExpr = String(details.data).split(',')[0]
+                        .replace(/\u04b3/g, '*')
                         .replace(/\u2795/g, '+')
                         .replace(/\u2796/g, '-')
                         .replace(/\u00f7/g, '/');
@@ -1528,164 +1136,479 @@ async function executeCrackingMatrix(ns, hostname, details) {
                         const evalRes = Function(`return (${cleanExpr})`)();
                         let targetLen = details.passwordLength || 2;
                         let resStr = evalRes.toString();
+                        if (resStr.length > targetLen) resStr = resStr.slice(0, targetLen);
 
-                        if (resStr.length > targetLen) {
-                            resStr = resStr.slice(0, targetLen);
-                        } else if (resStr.length < targetLen && resStr.includes('.')) {
-                            resStr = evalRes.toFixed(targetLen - resStr.indexOf('.') - 1);
-                        } else if (resStr.length < targetLen) {
-                            resStr = resStr.padEnd(targetLen, '0');
-                        }
-
-                        if ((await ns.dnet.authenticate(hostname, resStr)).success) return { success: true, password: resStr };
+                        // Telemetry Capture: Trap the evaluated math token authentication attempt
+                        auth = await ns.dnet.authenticate(hostname, resStr);
+                        if (auth.success) return { success: true, password: resStr };
                     }
-                } catch (e) { ns.tryWritePort(14, `[EXCEPTION17] - ${e}`) }
-            }
-            return { success: false };
-
-        case "TopPass": {
-            let tLen = details.passwordLength || 6;
-            const tFormat = details.passwordFormat || "alphabetic";
-
-            const passwordDictionary = {
-                3: ["123", "abc", "god", "cat", "dog", "sex", "win", "pop", "sam", "tom", "fox", "ace"],
-                4: ["1234", "qwer", "test", "love", "baby", "rock", "star", "king", "pass", "cool", "root", "l33t", "wolf", "lion", "zero", "link"],
-                5: ["12345", "login", "admin", "hello", "trust", "enter", "ninja", "tiger", "angel", "jesus", "money", "black", "white", "smart", "cyber", "linux", "apple"],
-                6: ["123456", "qwerty", "secret", "dragon", "monkey", "cheese", "shadow", "master", "server", "crypto", "oracle", "access", "online", "secure", "yellow", "purple", "orange", "matrix", "hunter", "killer", "soccer", "player", "wizard", "camera", "kernel", "socket", "binary", "cipher", "vector", "bypass", "bullet", "shield", "system"],
-                7: ["1234567", "welcome", "network", "connect", "warrior", "phoenix", "hacking", "gateway", "computer", "sunshine", "letmein", "pokemon", "freedom", "batman", "mustard", "forever", "perfect", "justice", "destiny", "phantom", "crystal", "digital", "unknown", "offline", "account", "startup"],
-                8: ["12345678", "password", "iloveyou", "princess", "baseball", "football", "superman", "starwars", "internet", "security", "terminal", "database", "critical", "software", "download", "firewall", "override", "loopback", "infinite", "absolute"],
-                9: ["123456789", "character", "anonymous", "dangerous", "interface", "mainframe", "algorithm", "developer", "encrypted", "masterkey", "processor"],
-                10: ["1234567890", "letmeingin", "cyberpunk2", "properties", "production", "background", "everything", "collection", "management", "experience"]
-            };
-
-            let candidates = [];
-
-            for (let key of Object.keys(globalPasswordVault)) {
-                let val = globalPasswordVault[key];
-                [key, val].forEach(str => {
-                    if (typeof str === 'string') {
-                        let tokens = str.split(/[^a-zA-Z0-9]/);
-                        for (let token of tokens) {
-                            if (token.length === tLen) {
-                                candidates.push(token, token.toLowerCase(), token.toUpperCase());
-                            }
-                        }
-                    }
-                });
-            }
-
-            let lengthPool = passwordDictionary[tLen] || [];
-            for (const word of lengthPool) {
-                candidates.push(word.toLowerCase(), word.charAt(0).toUpperCase() + word.slice(1), word.toUpperCase());
-            }
-
-            if (tFormat === "numeric") {
-                const commonPins = ["1234567890".slice(0, tLen), "0123456789".slice(0, tLen), "9876543210".slice(0, tLen)];
-                for (let d = 0; d <= 9; d++) commonPins.push(String(d).repeat(tLen));
-                candidates.push(...commonPins);
-            }
-
-            let uniqueGuesses = Array.from(new Set(candidates)).filter(g => {
-                if (g.length !== tLen) return false;
-                if (tFormat === "numeric") return /^\d+$/.test(g);
-                if (tFormat === "alphabetic") return /^[a-zA-Z]+$/.test(g);
-                return true;
-            });
-
-            for (const guess of uniqueGuesses) {
-                if ((await ns.dnet.authenticate(hostname, guess)).success) {
-                    return { success: true, password: guess };
+                } catch (e) {
+                    logDiag(`MathML error: ${e}`);
+                    // Trap execution runtime exceptions to bubble out through the logger
+                    auth = { message: "MathML parsing or arithmetic execution error", error: e.toString(), model: "MathML" };
                 }
             }
-
-            if (tFormat === "numeric" && tLen <= 6) {
-                for (let i = 0; i < Math.pow(10, tLen); i++) {
-                    let guess = i.toString().padStart(tLen, '0');
-                    if ((await ns.dnet.authenticate(hostname, guess)).success) {
-                        return { success: true, password: guess };
-                    }
-                }
-            }
-            return { success: false };
+            return { success: false, auth: auth };
         }
 
+        case "(The Labyrinth)":
+            return await solveLabyrinth(ns, hostname, logDiag, logSuccess);
+
         default:
-            if (!reportedUnknowns.has(hostname)) {
-                ns.tryWritePort(14, `[NEW MODEL] Host: ${hostname} | Model: ${details.modelId} | Hint: ${details.passwordHint} | Dump: ${JSON.stringify(details)}`);
-                reportedUnknowns.add(hostname);
+            if (!reportedUnknowns.has(model)) {
+                logDiag(`Unknown model: ${model} on ${hostname}. Hint: ${details.passwordHint}`);
+                reportedUnknowns.add(model);
             }
-            return { success: false };
+
+            // Secure structural fallback for the stringifier on an unmapped server architecture
+            return {
+                success: false,
+                auth: {
+                    message: "Unknown network model classification",
+                    model: model || "unspecified",
+                    hint: details?.passwordHint || "none"
+                }
+            };
     }
 }
 
-/**
- * \ud83d\udd01\ufe0f SHARDED & INSTRUMENTED MUTEX: Spreads locks across ports 10-13 and logs pool sizes.
- * @param {NS} ns */
-function acquireNetworkLock(ns, hostname, modelId) {
-    let hash = 0;
-    for (let i = 0; i < hostname.length; i++) {
-        hash = hostname.charCodeAt(i) + ((hash << 5) - hash);
-    }
-    const lockPort = 10 + Math.abs(hash % 4);
+/** @param {NS} ns */
+async function solveLabyrinth(ns, hostname, logDiag, logSuccess) {
+    const saveFile = `maze-${hostname}.txt`;
+    const home = "home";
     const currentHost = ns.getHostname();
+    let state = { grid: {} };
+    let auth;
 
-    let currentLocksData = ns.readPort(lockPort);
-    let locks = (currentLocksData === "NULL PORT DATA" || currentLocksData === "NULL DATA" || !currentLocksData) ? [] : JSON.parse(currentLocksData);
+    const syncLoad = () => {
+        if (ns.fileExists(saveFile, home)) {
+            if (currentHost !== home) ns.scp(saveFile, currentHost, home);
+            try {
+                state.grid = JSON.parse(ns.read(saveFile));
+            } catch (e) { logDiag(`Error parsing save file: ${e}`); }
+        }
+    };
 
-    let now = Date.now();
-    let validLocks = [];
-    let isLocked = false;
+    const syncSave = () => {
+        try {
+            ns.write(saveFile, JSON.stringify(state.grid), "w");
+            if (currentHost !== home) ns.scp(saveFile, home, currentHost);
+        } catch (e) { logDiag(`Error saving save file: ${e}`); }
+    };
 
-    for (let lock of locks) {
-        let targetHost = typeof lock === 'string' ? lock : lock.host;
-        let acquiredAt = typeof lock === 'string' ? now : lock.acquiredAt;
+    // =================================================================
+    // INDESTRUCTIBLE TOPOLOGICAL PATHFINDER
+    // =================================================================
+    function findNextExplorationStep(grid, startKey) {
+        let queue = [[startKey, []]];
+        let visited = new Set([startKey]);
 
-        if (targetHost === hostname) {
-            if (now - acquiredAt > 300000) {
-                // Clean stale configurations
-            } else {
-                isLocked = true;
-                validLocks.push({ host: targetHost, model: typeof lock === 'string' ? 'Unknown' : lock.model, acquiredAt: acquiredAt });
+        const dirMap = { n: "north", s: "south", e: "east", w: "west" };
+        const oppShort = { north: "s", south: "n", east: "w", west: "e" };
+
+        const getGlideNeighbor = (cx, cy, dir) => {
+            let bestKey = null;
+            let minDistance = Infinity;
+            for (let key in grid) {
+                let [tx, ty] = key.split(',').map(Number);
+                if (dir === "north" && tx === cx && ty < cy) {
+                    let dist = cy - ty;
+                    if (dist < minDistance) { minDistance = dist; bestKey = key; }
+                } else if (dir === "south" && tx === cx && ty > cy) {
+                    let dist = ty - cy;
+                    if (dist < minDistance) { minDistance = dist; bestKey = key; }
+                } else if (dir === "east" && ty === cy && tx > cx) {
+                    let dist = tx - cx;
+                    if (dist < minDistance) { minDistance = dist; bestKey = key; }
+                } else if (dir === "west" && ty === cy && tx < cx) {
+                    let dist = cx - tx;
+                    if (dist < minDistance) { minDistance = dist; bestKey = key; }
+                }
             }
-        } else {
-            if (now - acquiredAt <= 300000) {
-                validLocks.push({ host: targetHost, model: typeof lock === 'string' ? 'Unknown' : lock.model, acquiredAt: acquiredAt });
+            return bestKey;
+        };
+
+        while (queue.length > 0) {
+            let [currentKey, path] = queue.shift();
+            let room = grid[currentKey];
+
+            if (room) {
+                let [cx, cy] = currentKey.split(',').map(Number);
+
+                // 1. TOPOLOGICAL FRONTIER CHECK (With Mutual Return-Door Verification)
+                for (let shortDir in dirMap) {
+                    let fullDir = dirMap[shortDir];
+                    if (room[shortDir]) {
+                        let neighborKey = getGlideNeighbor(cx, cy, fullDir);
+                        let opp = oppShort[fullDir];
+
+                        // If no room lies ahead, OR a room exists but its facing door is closed,
+                        // this is a definitive unmapped frontier space!
+                        if (!neighborKey || !grid[neighborKey][opp]) {
+                            return [...path, fullDir];
+                        }
+                    }
+                }
+
+                // 2. BFS GRAPH EXPANSION (Only step through confirmed mutual corridors)
+                for (let shortDir in dirMap) {
+                    let fullDir = dirMap[shortDir];
+                    if (room[shortDir]) {
+                        let nextKey = getGlideNeighbor(cx, cy, fullDir);
+                        let opp = oppShort[fullDir];
+
+                        if (nextKey && grid[nextKey][opp] && !visited.has(nextKey)) {
+                            visited.add(nextKey);
+                            queue.push([nextKey, [...path, fullDir]]);
+                        }
+                    }
+                }
+            }
+        }
+        return null;
+    }
+
+    syncLoad();
+
+    // Original orientation kickstart sequence (Unchanged)
+    auth = await ns.dnet.authenticate(hostname, "go south");
+
+    let initialReport = await ns.dnet.labreport(hostname);
+
+    if (!initialReport || !initialReport.coords) {
+        let randomIndex = Math.floor(Math.random() * 4);
+        let randomDirection = ["north", "south", "east", "west"][randomIndex];
+
+        auth = await ns.dnet.authenticate(hostname, "go " + randomDirection);
+
+        let secondReport = await ns.dnet.labreport(hostname);
+    }
+
+    try {
+        while (true) {
+            // 1. INGEST TOPOLOGY snap from Port 20
+            let globalDataRaw = ns.peek(20);
+            if (globalDataRaw && globalDataRaw !== "NULL PORT DATA" && globalDataRaw !== "NULL DATA") {
+                try {
+                    let globalTopology = JSON.parse(globalDataRaw);
+                    Object.assign(state.grid, globalTopology);
+                } catch (e) { }
+            }
+
+            // 2. POLL SENSORS
+            let report = await ns.dnet.labreport(hostname);
+            if (!report || !report.coords) break;
+
+            const curKey = `${report.coords[0]},${report.coords[1]}`;
+
+            // 3. ENFORCE REALITY SUB-LATCH & BROADCAST
+            const liveWalls = { n: report.north, s: report.south, e: report.east, w: report.west };
+            state.grid[curKey] = liveWalls;
+
+            const discoveryPacket = { room: curKey, walls: liveWalls };
+            ns.tryWritePort(19, JSON.stringify(discoveryPacket));
+
+            // 4. EXPLOIT SCREENING (FULL RAW DUMP LOGS RESTORED)
+            const hb = await ns.dnet.heartbleed(hostname, { peek: true });
+
+            if (hb && hb.logs) {
+                const logStr = JSON.stringify(hb.logs);
+                if (logStr.includes("!!")) {
+                    const m = logStr.match(/!!([^!]+)!!/);
+                    if (m) {
+                        const pass = m[0];
+                        if ((await ns.dnet.authenticate(hostname, pass)).success) {
+                            logSuccess(`LABYRINTH CONQUERED: ${hostname}`);
+                            for (const c of ns.ls(hostname, '.cache')) {
+                                try { ns.dnet.openCache(c); } catch (e) { }
+                            }
+                            if (ns.fileExists(saveFile, home)) ns.rm(saveFile, home);
+                            return { success: true, password: pass };
+                        }
+                    }
+                }
+            }
+
+            // 5. CALCULATE GEOMETRIC NEXT STEP
+            const path = findNextExplorationStep(state.grid, curKey);
+
+            if (path && path.length > 0) {
+                const nextMove = path[0];
+                auth = await ns.dnet.authenticate(hostname, `go ${nextMove}`);
+                await ns.sleep(15);
+            } else {
+                // Instantly terminates loop upon real 100% graph completion (Unchanged)
+                logDiag(`Labyrinth fully explored at ${curKey}. No remaining frontiers found in shared map.`);
+                break;
             }
         }
     }
+    finally {
+        syncSave();
+    }
+    return { success: false, auth: auth };
+}
 
-    if (isLocked) {
-        ns.writePort(lockPort, JSON.stringify(validLocks));
-        localCooldowns.set(hostname, Date.now() + 1000); 
+/** @param {NS} ns */
+function acquireLock(ns, hostname, model) {
+    // Do not lock labyrinth
+    // if (model == "(The Labyrinth)") return true;
+    let hash = 0;
+    for (let i = 0; i < hostname.length; i++) hash = hostname.charCodeAt(i) + ((hash << 5) - hash);
+    const port = 10 + Math.abs(hash % 4);
+
+    let portData = ns.readPort(port);
+    let locks = (portData === "NULL PORT DATA" || portData === "NULL DATA" || !portData) ? [] : JSON.parse(portData);
+
+    const now = Date.now();
+    locks = locks.filter(l => now - l.acquiredAt < 300000);
+
+    if (locks.find(l => l.host === hostname)) {
+        ns.writePort(port, JSON.stringify(locks)); // Put them back!
         return false;
     }
 
-    validLocks.push({ host: hostname, model: modelId, acquiredAt: now });
-    ns.writePort(lockPort, JSON.stringify(validLocks));
+    locks.push({ host: hostname, acquiredAt: now });
+    ns.writePort(port, JSON.stringify(locks));
     return true;
 }
 
-/**
- * \ud83d\udd01\ufe0f SHARDED MUTEX CLEANUP: Releases the lock on the correct shard and applies back-off cooldown.
- * @param {NS} ns */
-function releaseNetworkLock(ns, hostname) {
+/** @param {NS} ns */
+function releaseLock(ns, hostname) {
     let hash = 0;
-    for (let i = 0; i < hostname.length; i++) {
-        hash = hostname.charCodeAt(i) + ((hash << 5) - hash);
-    }
-    const lockPort = 10 + Math.abs(hash % 4);
+    for (let i = 0; i < hostname.length; i++) hash = hostname.charCodeAt(i) + ((hash << 5) - hash);
+    const port = 10 + Math.abs(hash % 4);
 
-    let currentLocksData = ns.readPort(lockPort);
-    if (currentLocksData === "NULL PORT DATA" || currentLocksData === "NULL DATA" || !currentLocksData) return;
+    let portData = ns.readPort(port);
+    let locks = (portData === "NULL PORT DATA" || portData === "NULL DATA" || !portData) ? [] : JSON.parse(portData);
 
-    let locks = JSON.parse(currentLocksData);
-    locks = locks.filter(lock => (typeof lock === 'string' ? lock : lock.host) !== hostname);
-    ns.writePort(lockPort, JSON.stringify(locks));
-
-    localCooldowns.set(hostname, Date.now() + 500);
+    locks = locks.filter(l => l.host !== hostname);
+    ns.writePort(port, JSON.stringify(locks));
 }
 
-/** @param {AutocompleteData} data */
-export function autocomplete(data) {
-    return ["--tail"];
+
+/** @param {NS} ns */
+function getVaultPasswords(ns, currentHost, logDiag, logSuccess) {
+    // =========================================================================
+    // 🛰️ VAULT & STATE INITIALIZATION
+    // =========================================================================
+    if (currentHost === "home") {
+        logSuccess(`Worm ${WORM_VERSION} initialized on home.`);
+        if (ns.fileExists("darknet-keys.js", "home")) {
+            try {
+                const fileData = ns.read("darknet-keys.js");
+                if (fileData) globalPasswordVault = JSON.parse(fileData);
+            }
+            catch (e) {
+                logDiag(`Error loading vault: ${e}`);
+            }
+        }
+    } else {
+        // Sync vault from home
+        try {
+            if (ns.fileExists("darknet-keys.js", "home")) {
+                if (ns.scp("darknet-keys.js", currentHost, "home")) {
+                    const fileData = ns.read("darknet-keys.js");
+                    if (fileData) {
+                        try {
+                            const remoteVault = JSON.parse(fileData);
+                            globalPasswordVault = Object.assign({}, remoteVault, globalPasswordVault);
+                            // Auto-session if we have the key for the current host
+                            if (globalPasswordVault[currentHost]) {
+                                ns.dnet.connectToSession(currentHost, globalPasswordVault[currentHost]);
+                            }
+                        } catch (e) { logDiag(`Error parsing vault: ${e}`); }
+                    }
+                }
+            }
+        } catch (e) { logDiag(`Vault sync failed: ${e}`); }
+    }
+}
+
+/** @param {NS} ns */
+function getStasisLinks(ns, currentHost, logDiag) {
+    let stasisFileText = "";
+    if (currentHost == "home") {
+        if (ns.fileExists(stasisFile, "home")) {
+            try {
+                stasisFileText = ns.read(stasisFile);
+            }
+            catch (e) {
+                logDiag(`Cannot read stasisLink file: ${stasisFile}`);
+            }
+        }
+    }
+    else {
+        if (ns.fileExists(stasisFile, "home")) {
+            if (ns.scp(stasisFile, currentHost, "home")) {
+                try {
+                    stasisFileText = ns.read(stasisFile);
+                }
+                catch (e) {
+                    logDiag(`Cannot read stasisLink file: ${stasisFile}`);
+                }
+            }
+            else {
+                logDiag(`Cannot copy stasisLink file from home`)
+            }
+        }
+    }
+    if (stasisFileText) {
+        return stasisFileText.split(",")
+            .map(item => item.trim())       // Remove spaces around numbers
+            .filter(item => item !== "")    // Drop the trailing empty element
+            .map(Number);                   // Convert strings ("1") to numbers (1)
+    }
+    else {
+        return [];
+    }
+}
+
+/** @param {NS} ns */
+function setStasisLinks(ns, currentHost, logDiag) {
+    if (currentHost != "home") {
+        try {
+            ns.write(stasisFile, stasisLinks, "w");
+            ns.scp(stasisFile, "home", currentHost);
+        }
+        catch (e) {
+            logDiag(`Error writing stasisLink file to home ${e}`)
+        }
+    }
+}
+
+/** @param {NS} ns */
+function establishStasisLink(ns, currentHost, logDiag, logSuccess) {
+    if (currentHost != "home" && currentHost != "darkweb") {
+        let currentServerDetails = ns.dnet.getServerDetails(currentHost);
+        // If current server depth is 9, 17 or 23 and there is no link already at that depth
+        if ([8, 16, 22].includes(currentServerDetails.depth) && !stasisLinks.includes(currentServerDetails.depth)) {
+            if (stasisLinks.length < ns.dnet.getStasisLinkLimit()) {
+                // create a stasis link on this server
+                const freeRam = ns.getServerMaxRam(currentHost) - ns.getServerUsedRam(currentHost);
+                // Only compile and execute the worker if the node can support the 12GB runtime cost
+                if (freeRam >= 12) {
+                    ns.write("stasis-worker.js", '/** @param {NS} ns */ export async function main(ns) { ns.dnet.setStasisLink(); }', "w");
+                    ns.exec("stasis-worker.js", currentHost);
+                    stasisLinks.push(currentServerDetails.depth);
+                    setStasisLinks(ns, currentHost, logDiag);
+                    logSuccess(`Dynamically deployed stasis worker on ${currentHost} - depth: ${currentServerDetails.depth}`);
+                    // ns.tprint(`Dynamically deployed stasis worker on ${currentHost} - depth: ${currentServerDetails.depth}`)
+                } else {
+                    // logDiag(`Insufficient RAM on ${currentHost} to execute background stasis anchor.`);
+                }
+            }
+        }
+    }
+}
+
+/** @param {NS} ns */
+function lootCacheFiles(ns, currentHost, logDiag, logSuccess) {
+    // Loot local caches
+    const localCaches = ns.ls(currentHost, ".cache");
+    for (const cacheFile of localCaches) {
+        try {
+            const result = ns.dnet.openCache(cacheFile);
+            logSuccess(`Looted ${cacheFile}: ${JSON.stringify(result)}`);
+        } catch (e) {
+            logDiag(`[CACHE-ERR] Failed to decrypt cache ${cacheFile} on ${currentHost}: ${e}`);
+        }
+    }
+
+    // 📥 RESTORED: Gather raw data text files and exfiltrate them back to home
+    if (currentHost !== "home" && currentHost !== "darkweb") {
+        try {
+            const allFiles = ns.ls(currentHost);
+            const dataFiles = allFiles.filter(f => f.endsWith(".txt") || f.includes(".data"));
+
+            for (const file of dataFiles) {
+                if (file === "darknet-diagnostics.txt" || file === "darknet-success.txt" || file === "darknet-words.txt") {
+                    continue;
+                }
+
+                const fileTrackingKey = `${currentHost}:${file}`;
+
+                if (!dataFilesCopied.has(fileTrackingKey)) {
+                    try {
+                        const success = ns.scp(file, "home", currentHost);
+
+                        if (success) {
+                            dataFilesCopied.add(fileTrackingKey);
+                            logSuccess(`Exfiltrated data asset: ${file} -> home`);
+
+                            const portAlert = JSON.stringify({ host: currentHost, filename: file });
+                            ns.tryWritePort(21, portAlert);
+                        } else {
+                            logDiag(`[EXFIL-WARN] ns.scp returned false for ${file} from ${currentHost}`);
+                        }
+                    } catch (fileError) {
+                        logDiag(`[EXFIL-ERR] Failed transfer protocol for ${file} on ${currentHost}: ${fileError}`);
+                    }
+                }
+            }
+        } catch (scanError) {
+            logDiag(`[SCAN-ERR] Directory map listing failed on ${currentHost}: ${scanError}`);
+        }
+
+        // 3. Your original commented anchors preserved exactly
+        const localFiles = ns.ls(currentHost, ".exe");
+        if (localFiles.length > 0) {
+            // what can we do???
+            // ns.dnet.unleashStormSeed();
+        }
+    }
+}
+
+/** @param {NS} ns */
+async function deployBootstrap(ns, hostname, currentHost) {
+    if (ns.scp(["dnet-worm.js", "dnet-bootstrap.js"], hostname, currentHost)) {
+        ns.exec("dnet-bootstrap.js", hostname, { threads: 1, preventDuplicates: true }, WORM_VERSION, hostname);
+    }
+}
+
+/** @param {NS} ns */
+function getRankedNearbyServers(ns) {
+    const nearbyServers = ns.dnet.probe();
+    return nearbyServers.map(h => {
+        try {
+            const d = ns.dnet.getServerDetails(h);
+            const isLab = d.modelId === "(The Labyrinth)" || h.includes("l4byr1nth");
+            return { hostname: h, depth: d.depth || 0, isHighValue: isLab || (d.depth > 15), modelId: d.modelId };
+        } catch (e) { return { hostname: h, depth: 0, isHighValue: false, modelId: "Unknown" }; }
+    }).sort((a, b) => {
+        if (a.isHighValue && !b.isHighValue) return -1;
+        if (!a.isHighValue && b.isHighValue) return 1;
+        return b.depth - a.depth;
+    });
+}
+
+/** @param {NS} ns */
+function wormIsOlder(ns, hostname, scriptName, logDiag) {
+    const processes = ns.ps(hostname);
+    const existing = processes.find(p => p.filename === scriptName);
+
+    if (existing) {
+        // Extract version from arguments, fallback to v0.0.0
+        const remoteVersion = (existing.args[0] || "v0.0.0").replace('v', '');
+        const localVersion = WORM_VERSION.replace('v', '');
+
+        const rParts = remoteVersion.split('.').map(Number);
+        const lParts = localVersion.split('.').map(Number);
+
+        // Compare major, minor, then patch
+        for (let i = 0; i < 3; i++) {
+            if (lParts[i] > rParts[i]) {
+                // logDiag(`Upgrading ${hostname}: ${remoteVersion} -> ${WORM_VERSION}`);
+                ns.kill(existing.pid);
+                return true; // Upgrade path
+            }
+            if (lParts[i] < rParts[i]) {
+                return false; // Running a newer version than I am; do nothing!
+            }
+        }
+    }
+    else {
+        ns.scp(scriptName, hostname);
+    }
+    return false; // Versions are equal or no process found
 }
