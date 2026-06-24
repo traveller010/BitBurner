@@ -12,7 +12,6 @@ export async function main(ns) {
     ns.disableLog("ALL");
     const currentHost = ns.getHostname();
     const scriptName = ns.getScriptName();
-    ns.readPort(18);
 
     function getTimestamp() {
         const d = new Date();
@@ -24,7 +23,7 @@ export async function main(ns) {
 
     getVaultPasswords(ns, currentHost, logDiag, logSuccess);
     lootCacheFiles(ns, currentHost, logDiag, logSuccess);
-    stasisLinks = getStasisLinks(ns, currentHost, logDiag);
+    stasisLinks = getStasisLinks(ns,currentHost, logDiag);
 
     while (true) {
         lootCacheFiles(ns, currentHost, logDiag, logSuccess);
@@ -80,15 +79,12 @@ export async function main(ns) {
             }
 
             if (auth && auth.success) {
-                // logDiag(`${hostname} has session, processing bootstrapper`)
-                // logDiag(`Port 18: ${ns.peek(18)}`)
-                // 🔄 SWARM INGESTION: Drain and deploy completed targets from Port 18
                 processBootstrapQueue(ns, currentHost, logDiag);
             }
         }
 
         // 🔄 SWARM INGESTION: Drain and deploy completed targets from Port 18
-        processBootstrapQueue(ns, currentHost, logDiag);
+        processBootstrapQueue(ns, currentHost);
 
         // =================================================================
         // 🛰️ OFFICIAL IDLE UTILITY ENGINE
@@ -118,6 +114,7 @@ export async function main(ns) {
 /** @param {NS} ns */
 // ADD currentHost to the arguments list!
 async function serverSolver(ns, hostname, currentHost, logDiag, logSuccess) {
+    // if (localCooldowns.has(hostname) && Date.now() < localCooldowns.get(hostname)) return false;
 
     const details = ns.dnet.getServerDetails(hostname);
     if (!details.isConnectedToCurrentServer || !details.isOnline) return false;
@@ -158,9 +155,7 @@ async function serverSolver(ns, hostname, currentHost, logDiag, logSuccess) {
             } else {
                 delete globalPasswordVault[hostname];
             }
-        } catch (e) {
-            delete globalPasswordVault[hostname];
-        }
+        } catch (e) { delete globalPasswordVault[hostname]; }
     }
 
     if (!acquireLock(ns, hostname, details.modelId)) return false;
@@ -1167,6 +1162,7 @@ async function crackingMatrix(ns, hostname, currentHost, details, logDiag, logSu
 /** @param {NS} ns */
 async function solveLabyrinth(ns, hostname, logDiag, logSuccess) {
     const home = "home";
+    const currentHost = ns.getHostname();
     let state = { grid: {} };
     let auth;
     let duration
@@ -1176,7 +1172,8 @@ async function solveLabyrinth(ns, hostname, logDiag, logSuccess) {
     // =================================================================
     function findNextExplorationStep(grid, startKey) {
         let fStart = performance.now();
-        let queue = [[startKey, []]];
+        // 🔄 Shifted from a Queue to a LIFO Stack array
+        let stack = [[startKey, []]];
         let visited = new Set([startKey]);
 
         const dirMap = { n: "north", s: "south", e: "east", w: "west" };
@@ -1204,8 +1201,9 @@ async function solveLabyrinth(ns, hostname, logDiag, logSuccess) {
             return bestKey;
         };
 
-        while (queue.length > 0) {
-            let [currentKey, path] = queue.shift();
+        while (stack.length > 0) {
+            // 🔄 Crucial Change: pop() extracts the newest element, diving deep into the last path
+            let [currentKey, path] = stack.pop();
             let room = grid[currentKey];
 
             if (room) {
@@ -1218,17 +1216,15 @@ async function solveLabyrinth(ns, hostname, logDiag, logSuccess) {
                         let neighborKey = getGlideNeighbor(cx, cy, fullDir);
                         let opp = oppShort[fullDir];
 
-                        // If no room lies ahead, OR a room exists but its facing door is closed,
-                        // this is a definitive unmapped frontier space!
                         if (!neighborKey || !grid[neighborKey][opp]) {
                             duration = performance.now() - fStart;
-                            logDiag(`findNextExplorationStep(1): ${duration}`)
+                            logDiag(`findNextExplorationStep(1) [DFS]: ${duration}`);
                             return [...path, fullDir];
                         }
                     }
                 }
 
-                // 2. BFS GRAPH EXPANSION (Only step through confirmed mutual corridors)
+                // 2. DFS GRAPH EXPANSION (Pushes neighbors onto stack)
                 for (let shortDir in dirMap) {
                     let fullDir = dirMap[shortDir];
                     if (room[shortDir]) {
@@ -1237,14 +1233,14 @@ async function solveLabyrinth(ns, hostname, logDiag, logSuccess) {
 
                         if (nextKey && grid[nextKey][opp] && !visited.has(nextKey)) {
                             visited.add(nextKey);
-                            queue.push([nextKey, [...path, fullDir]]);
+                            stack.push([nextKey, [...path, fullDir]]);
                         }
                     }
                 }
             }
         }
         duration = performance.now() - fStart;
-        logDiag(`findNextExplorationStep(2): ${duration}`)
+        logDiag(`findNextExplorationStep(2) [DFS]: ${duration}`);
         return null;
     }
 
@@ -1272,8 +1268,8 @@ async function solveLabyrinth(ns, hostname, logDiag, logSuccess) {
     try {
         while (true) {
             let wStart = performance.now();
-            // 1. INGEST TOPOLOGY snap from Port 20
-            let globalDataRaw = ns.peek(20);
+            // 1. INGEST TOPOLOGY snap from Port 26
+            let globalDataRaw = ns.peek(26);
             if (globalDataRaw && globalDataRaw !== "NULL PORT DATA" && globalDataRaw !== "NULL DATA") {
                 try {
                     let globalTopology = JSON.parse(globalDataRaw);
@@ -1301,7 +1297,7 @@ async function solveLabyrinth(ns, hostname, logDiag, logSuccess) {
 
             let portWrite = performance.now();
             const discoveryPacket = { labyrinth: hostname, room: curKey, walls: liveWalls };
-            ns.tryWritePort(19, JSON.stringify(discoveryPacket));
+            ns.tryWritePort(25, JSON.stringify(discoveryPacket));
             duration = performance.now() - portWrite;
             logDiag(`Write to port duration: ${duration}`)
 
@@ -1353,8 +1349,7 @@ async function solveLabyrinth(ns, hostname, logDiag, logSuccess) {
             duration = performance.now() - nStart
             logDiag(`Calculate Geometric duration: ${duration}`)
         }
-    }
-    catch (e) {
+    } catch (e) {
         logDiag(`Error in solveLabyrinth: ${e}`);
     }
     return { success: false, auth: auth };
@@ -1396,6 +1391,7 @@ function releaseLock(ns, hostname) {
     locks = locks.filter(l => l.host !== hostname);
     ns.writePort(port, JSON.stringify(locks));
 }
+
 
 /** @param {NS} ns */
 function getVaultPasswords(ns, currentHost, logDiag, logSuccess) {
@@ -1573,7 +1569,6 @@ function lootCacheFiles(ns, currentHost, logDiag, logSuccess) {
 async function deployBootstrap(ns, hostname, currentHost, logDiag, scriptName) {
     try {
         // Run the resource allocation monitor locally to manage the remote target safely
-        ns.scp("dnet-bootstrap.js", currentHost, "home")
         ns.exec("dnet-bootstrap.js", currentHost, { threads: 1, preventDuplicates: true }, WORM_VERSION, hostname, scriptName);
     } catch (e) {
         logDiag(`Failed to launch bootstrapper on ${currentHost} for ${hostname}: ${e}`);
@@ -1616,9 +1611,9 @@ function wormIsOlder(ns, hostname, scriptName, logDiag) {
         }
         return false; // Versions are identical
     }
-
+    
     // 🎯 THE FIX: No process found means it definitely needs a worm deployed!
-    return true;
+    return true; 
 }
 
 /**

@@ -12,7 +12,6 @@ export async function main(ns) {
     ns.disableLog("ALL");
     const currentHost = ns.getHostname();
     const scriptName = ns.getScriptName();
-    ns.readPort(18);
 
     function getTimestamp() {
         const d = new Date();
@@ -24,7 +23,7 @@ export async function main(ns) {
 
     getVaultPasswords(ns, currentHost, logDiag, logSuccess);
     lootCacheFiles(ns, currentHost, logDiag, logSuccess);
-    stasisLinks = getStasisLinks(ns, currentHost, logDiag);
+    stasisLinks = getStasisLinks(ns,currentHost, logDiag);
 
     while (true) {
         lootCacheFiles(ns, currentHost, logDiag, logSuccess);
@@ -80,9 +79,6 @@ export async function main(ns) {
             }
 
             if (auth && auth.success) {
-                // logDiag(`${hostname} has session, processing bootstrapper`)
-                // logDiag(`Port 18: ${ns.peek(18)}`)
-                // 🔄 SWARM INGESTION: Drain and deploy completed targets from Port 18
                 processBootstrapQueue(ns, currentHost, logDiag);
             }
         }
@@ -118,6 +114,7 @@ export async function main(ns) {
 /** @param {NS} ns */
 // ADD currentHost to the arguments list!
 async function serverSolver(ns, hostname, currentHost, logDiag, logSuccess) {
+    // if (localCooldowns.has(hostname) && Date.now() < localCooldowns.get(hostname)) return false;
 
     const details = ns.dnet.getServerDetails(hostname);
     if (!details.isConnectedToCurrentServer || !details.isOnline) return false;
@@ -158,9 +155,7 @@ async function serverSolver(ns, hostname, currentHost, logDiag, logSuccess) {
             } else {
                 delete globalPasswordVault[hostname];
             }
-        } catch (e) {
-            delete globalPasswordVault[hostname];
-        }
+        } catch (e) { delete globalPasswordVault[hostname]; }
     }
 
     if (!acquireLock(ns, hostname, details.modelId)) return false;
@@ -1167,133 +1162,151 @@ async function crackingMatrix(ns, hostname, currentHost, details, logDiag, logSu
 /** @param {NS} ns */
 async function solveLabyrinth(ns, hostname, logDiag, logSuccess) {
     const home = "home";
-    let state = { grid: {} };
+    const currentHost = ns.getHostname();
+    
+    // Memory state structures preserved
+    let state = {
+        grid: {},
+        pathVisits: {},
+        history: []
+    };
     let auth;
-    let duration
+    let duration;
 
     // =================================================================
-    // INDESTRUCTIBLE TOPOLOGICAL PATHFINDER
+    // INDESTRUCTIBLE TOPOLOGICAL PATHFINDER (GLIDE-PROOF TRÉMAUX)
     // =================================================================
-    function findNextExplorationStep(grid, startKey) {
+    function findNextExplorationStep(grid, startKey, pathVisits, history) {
         let fStart = performance.now();
-        let queue = [[startKey, []]];
-        let visited = new Set([startKey]);
+        let room = grid[startKey];
+
+        if (!room) {
+            duration = performance.now() - fStart;
+            logDiag(`findNextExplorationStep [TM]: No room data yet: ${duration}`);
+            return null;
+        }
 
         const dirMap = { n: "north", s: "south", e: "east", w: "west" };
-        const oppShort = { north: "s", south: "n", east: "w", west: "e" };
+        const oppFull = { north: "south", south: "north", east: "west", west: "east" };
 
-        const getGlideNeighbor = (cx, cy, dir) => {
-            let bestKey = null;
-            let minDistance = Infinity;
-            for (let key in grid) {
-                let [tx, ty] = key.split(',').map(Number);
-                if (dir === "north" && tx === cx && ty < cy) {
-                    let dist = cy - ty;
-                    if (dist < minDistance) { minDistance = dist; bestKey = key; }
-                } else if (dir === "south" && tx === cx && ty > cy) {
-                    let dist = ty - cy;
-                    if (dist < minDistance) { minDistance = dist; bestKey = key; }
-                } else if (dir === "east" && ty === cy && tx > cx) {
-                    let dist = tx - cx;
-                    if (dist < minDistance) { minDistance = dist; bestKey = key; }
-                } else if (dir === "west" && ty === cy && tx < cx) {
-                    let dist = cx - tx;
-                    if (dist < minDistance) { minDistance = dist; bestKey = key; }
-                }
-            }
-            return bestKey;
-        };
+        if (!pathVisits[startKey]) pathVisits[startKey] = { north: 0, south: 0, east: 0, west: 0 };
 
-        while (queue.length > 0) {
-            let [currentKey, path] = queue.shift();
-            let room = grid[currentKey];
-
-            if (room) {
-                let [cx, cy] = currentKey.split(',').map(Number);
-
-                // 1. TOPOLOGICAL FRONTIER CHECK (With Mutual Return-Door Verification)
-                for (let shortDir in dirMap) {
-                    let fullDir = dirMap[shortDir];
-                    if (room[shortDir]) {
-                        let neighborKey = getGlideNeighbor(cx, cy, fullDir);
-                        let opp = oppShort[fullDir];
-
-                        // If no room lies ahead, OR a room exists but its facing door is closed,
-                        // this is a definitive unmapped frontier space!
-                        if (!neighborKey || !grid[neighborKey][opp]) {
-                            duration = performance.now() - fStart;
-                            logDiag(`findNextExplorationStep(1): ${duration}`)
-                            return [...path, fullDir];
-                        }
-                    }
-                }
-
-                // 2. BFS GRAPH EXPANSION (Only step through confirmed mutual corridors)
-                for (let shortDir in dirMap) {
-                    let fullDir = dirMap[shortDir];
-                    if (room[shortDir]) {
-                        let nextKey = getGlideNeighbor(cx, cy, fullDir);
-                        let opp = oppShort[fullDir];
-
-                        if (nextKey && grid[nextKey][opp] && !visited.has(nextKey)) {
-                            visited.add(nextKey);
-                            queue.push([nextKey, [...path, fullDir]]);
-                        }
-                    }
-                }
+        let availableExits = [];
+        for (let shortDir in dirMap) {
+            let fullDir = dirMap[shortDir];
+            if (room[shortDir]) {
+                let marks = pathVisits[startKey][fullDir] || 0;
+                availableExits.push({ dir: fullDir, marks });
             }
         }
+
+        // TRÉMAUX RULE 1: Unvisited paths
+        let unvisitedExits = availableExits.filter(e => e.marks === 0);
+        if (unvisitedExits.length > 0) {
+            let choice = unvisitedExits[0];
+            pathVisits[startKey][choice.dir] = 1;
+            history.push(oppFull[choice.dir]);
+
+            duration = performance.now() - fStart;
+            logDiag(`findNextExplorationStep [TM]: Gliding fresh direction ${choice.dir}: ${duration}`);
+            return [choice.dir];
+        }
+
+        // TRÉMAUX RULE 2: Double-marking dead ends
+        if (history.length > 0) {
+            let backwardDir = history[history.length - 1];
+            let incomingCorridor = availableExits.find(e => e.dir === backwardDir);
+
+            if (incomingCorridor && incomingCorridor.marks === 1) {
+                pathVisits[startKey][backwardDir] = 2;
+                history.pop();
+
+                duration = performance.now() - fStart;
+                logDiag(`findNextExplorationStep [TM]: Backtracking down corridor ${backwardDir}: ${duration}`);
+                return [backwardDir];
+            }
+        }
+
+        // TRÉMAUX RULE 3: Clearing alternative paths
+        let oneMarkExits = availableExits.filter(e => e.marks === 1);
+        if (oneMarkExits.length > 0) {
+            let choice = oneMarkExits[0];
+            pathVisits[startKey][choice.dir] = 2;
+
+            if (history[history.length - 1] === choice.dir) history.pop();
+
+            duration = performance.now() - fStart;
+            logDiag(`findNextExplorationStep [TM]: Cleaning up alternative open branch ${choice.dir}: ${duration}`);
+            return [choice.dir];
+        }
+
         duration = performance.now() - fStart;
-        logDiag(`findNextExplorationStep(2): ${duration}`)
+        logDiag(`findNextExplorationStep [TM]: Maze section completely explored: ${duration}`);
         return null;
     }
 
     // Original orientation kickstart sequence (Unchanged)
-    let tempDir = ["south", "north", "east", "west"][Math.floor(Math.random() * 4)]
+    let tempDir = ["south", "north", "east", "west"][Math.floor(Math.random() * 4)];
     auth = await ns.dnet.authenticate(hostname, tempDir);
 
-    let lStart = performance.now()
+    let lStart = performance.now();
     let initialReport = await ns.dnet.labreport(hostname);
     duration = performance.now() - lStart;
-    logDiag(`Lab Report await: ${duration}`)
+    logDiag(`Lab Report await: ${duration}`);
 
     if (!initialReport || !initialReport.coords) {
         let randomIndex = Math.floor(Math.random() * 4);
         let randomDirection = ["north", "south", "east", "west"][randomIndex];
 
-        let authStart = performance.now()
+        let authStart = performance.now();
         auth = await ns.dnet.authenticate(hostname, "go " + randomDirection);
         duration = performance.now() - authStart;
-        logDiag(`authenticate await 1: ${duration}`)
-
-        // let secondReport = await ns.dnet.labreport(hostname);
+        logDiag(`authenticate await 1: ${duration}`);
     }
+
+    // Scope tracking variables outside the loop to maintain historical state across glides
+    let curKey = null;
+    let chosenDir = null;
 
     try {
         while (true) {
             let wStart = performance.now();
-            // 1. INGEST TOPOLOGY snap from Port 20
-            let globalDataRaw = ns.peek(20);
+            // 1. INGEST TOPOLOGY snap from Port 28
+            let globalDataRaw = ns.peek(28);
             if (globalDataRaw && globalDataRaw !== "NULL PORT DATA" && globalDataRaw !== "NULL DATA") {
                 try {
                     let globalTopology = JSON.parse(globalDataRaw);
                     Object.assign(state.grid, globalTopology);
                 }
                 catch (e) {
-                    logDiag(`Error getting topology: ${e}`)
+                    logDiag(`Error getting topology: ${e}`);
                 }
             }
             duration = performance.now() - wStart;
-            logDiag(`While loop. Get topology: ${duration}`)
+            logDiag(`While loop. Get topology: ${duration}`);
 
             let labStart = performance.now();
+
             // 2. POLL SENSORS
+            let oldKey = curKey; 
             let report = await ns.dnet.labreport(hostname);
             duration = performance.now() - labStart;
-            logDiag(`While loop. LabReport: ${duration}`)
+            logDiag(`While loop. LabReport: ${duration}`);
             if (!report || !report.coords) break;
 
-            const curKey = `${report.coords[0]},${report.coords[1]}`;
+            // 🔄 RESTORED: Dynamic array indexing from your configuration snapshot
+            curKey = `${report.coords[0]},${report.coords[1]}`;
+
+            // GLIDE MECHANIC SYNC: Link marks across the glide space
+            if (oldKey && oldKey !== curKey && chosenDir) {
+                const oppFull = { north: "south", south: "north", east: "west", west: "east" };
+                let arrivalDir = oppFull[chosenDir];
+
+                if (!state.pathVisits[curKey]) state.pathVisits[curKey] = { north: 0, south: 0, east: 0, west: 0 };
+                if (!state.pathVisits[oldKey]) state.pathVisits[oldKey] = { north: 0, south: 0, east: 0, west: 0 };
+
+                state.pathVisits[curKey][arrivalDir] = state.pathVisits[oldKey][chosenDir];
+            }
 
             // 3. ENFORCE REALITY SUB-LATCH & BROADCAST
             const liveWalls = { n: report.north, s: report.south, e: report.east, w: report.west };
@@ -1301,19 +1314,18 @@ async function solveLabyrinth(ns, hostname, logDiag, logSuccess) {
 
             let portWrite = performance.now();
             const discoveryPacket = { labyrinth: hostname, room: curKey, walls: liveWalls };
-            ns.tryWritePort(19, JSON.stringify(discoveryPacket));
+            ns.tryWritePort(27, JSON.stringify(discoveryPacket));
             duration = performance.now() - portWrite;
-            logDiag(`Write to port duration: ${duration}`)
+            logDiag(`Write to port duration: ${duration}`);
 
-            let hbStart = performance.now()
-            // 4. EXPLOIT SCREENING (FULL RAW DUMP LOGS RESTORED)
+            let hbStart = performance.now();
+            // 4. EXPLOIT SCREENING
             const hb = await ns.dnet.heartbleed(hostname, { peek: true });
             duration = performance.now() - hbStart;
-            logDiag(`HB await duration: ${duration}`)
+            logDiag(`HB await duration: ${duration}`);
 
-            let successStart = performance.now()
+            let successStart = performance.now();
             if (hb && hb.logs) {
-
                 const logStr = JSON.stringify(hb.logs);
                 if (logStr.includes("!!")) {
                     const m = logStr.match(/!!([^!]+)!!/);
@@ -1324,37 +1336,34 @@ async function solveLabyrinth(ns, hostname, logDiag, logSuccess) {
                             for (const c of ns.ls(hostname, '.cache')) {
                                 try { ns.dnet.openCache(c); } catch (e) { }
                             }
-                            if (ns.fileExists(saveFile, home)) ns.rm(saveFile, home);
-
                             return { success: true, password: pass };
                         }
                     }
                 }
             }
             duration = performance.now() - successStart;
-            logDiag(`Check success duration: ${duration}`)
+            logDiag(`Check success duration: ${duration}`);
 
             // 5. CALCULATE GEOMETRIC NEXT STEP
             let nStart = performance.now();
-            const path = findNextExplorationStep(state.grid, curKey);
+            
+            // Pass all mandatory parameters to the local pathfinder
+            const path = findNextExplorationStep(state.grid, curKey, state.pathVisits, state.history);
 
             if (path && path.length > 0) {
-                const nextMove = path[0];
-                let authStart = performance.now()
-                auth = await ns.dnet.authenticate(hostname, `go ${nextMove}`);
-                // await ns.sleep(15);
+                chosenDir = path[0]; // Track direction globally for the next loop's glide check
+                let authStart = performance.now();
+                auth = await ns.dnet.authenticate(hostname, `go ${chosenDir}`);
                 duration = performance.now() - authStart;
-                logDiag(`authenticate await2: ${duration}`)
+                logDiag(`authenticate await2: ${duration}`);
             } else {
-                // Instantly terminates loop upon real 100% graph completion (Unchanged)
                 logDiag(`Labyrinth fully explored at ${curKey}. No remaining frontiers found in shared map.`);
                 break;
             }
-            duration = performance.now() - nStart
-            logDiag(`Calculate Geometric duration: ${duration}`)
+            duration = performance.now() - nStart;
+            logDiag(`Calculate Geometric duration: ${duration}`);
         }
-    }
-    catch (e) {
+    } catch (e) {
         logDiag(`Error in solveLabyrinth: ${e}`);
     }
     return { success: false, auth: auth };
@@ -1396,6 +1405,7 @@ function releaseLock(ns, hostname) {
     locks = locks.filter(l => l.host !== hostname);
     ns.writePort(port, JSON.stringify(locks));
 }
+
 
 /** @param {NS} ns */
 function getVaultPasswords(ns, currentHost, logDiag, logSuccess) {
@@ -1573,7 +1583,6 @@ function lootCacheFiles(ns, currentHost, logDiag, logSuccess) {
 async function deployBootstrap(ns, hostname, currentHost, logDiag, scriptName) {
     try {
         // Run the resource allocation monitor locally to manage the remote target safely
-        ns.scp("dnet-bootstrap.js", currentHost, "home")
         ns.exec("dnet-bootstrap.js", currentHost, { threads: 1, preventDuplicates: true }, WORM_VERSION, hostname, scriptName);
     } catch (e) {
         logDiag(`Failed to launch bootstrapper on ${currentHost} for ${hostname}: ${e}`);
@@ -1616,9 +1625,9 @@ function wormIsOlder(ns, hostname, scriptName, logDiag) {
         }
         return false; // Versions are identical
     }
-
+    
     // 🎯 THE FIX: No process found means it definitely needs a worm deployed!
-    return true;
+    return true; 
 }
 
 /**
