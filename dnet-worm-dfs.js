@@ -73,18 +73,11 @@ export async function main(ns) {
                 ns.tryWritePort(17, JSON.stringify({ host: hostname, pass: auth.password }));
             }
 
-            // If target needs an upgrade or is un-wormed, hand it off to the bootstrapper
-            if (wormIsOlder(ns, hostname, scriptName, logDiag)) {
-                await deployBootstrap(ns, hostname, currentHost, logDiag, scriptName);
-            }
-
+            // 🚀 INTEGRATED SWARM MANAGEMENT: Handle reallocation and deployment directly
             if (auth && auth.success) {
-                processBootstrapQueue(ns, currentHost, logDiag);
+                await manageSwarmDeployment(ns, hostname, currentHost, logDiag, logSuccess);
             }
         }
-
-        // 🔄 SWARM INGESTION: Drain and deploy completed targets from Port 18
-        processBootstrapQueue(ns, currentHost);
 
         // =================================================================
         // 🛰️ OFFICIAL IDLE UTILITY ENGINE
@@ -1565,13 +1558,95 @@ function lootCacheFiles(ns, currentHost, logDiag, logSuccess) {
     }
 }
 
-/** @param {NS} ns */
-async function deployBootstrap(ns, hostname, currentHost, logDiag, scriptName) {
-    try {
-        // Run the resource allocation monitor locally to manage the remote target safely
-        ns.exec("dnet-bootstrap.js", currentHost, { threads: 1, preventDuplicates: true }, WORM_VERSION, hostname, scriptName);
-    } catch (e) {
-        logDiag(`Failed to launch bootstrapper on ${currentHost} for ${hostname}: ${e}`);
+/**
+ * Consolidated Swarm Management Logic (Replaces dnet-bootstrap.js)
+ * @param {NS} ns
+ * @param {string} targetHost
+ * @param {string} currentHost
+ * @param {function} logDiag
+ * @param {function} logSuccess
+ */
+async function manageSwarmDeployment(ns, targetHost, currentHost, logDiag, logSuccess) {
+    const allWormVariants = ["dnet-worm.js", "dnet-worm-dfs.js", "dnet-worm-tm.js"];
+    const maxRam = ns.getServerMaxRam(targetHost);
+    const maxWormsPossible = Math.min(3, Math.floor(maxRam / WORM_COST));
+
+    if (maxWormsPossible === 0) return;
+
+    const processes = ns.ps(targetHost);
+    let variantsToDeploy = [];
+
+    // 1. Version Guard: Kill older versions of ANY variant
+    for (const variant of allWormVariants) {
+        const existing = processes.find(p => p.filename === variant);
+        if (existing) {
+            const remoteVersion = (existing.args[0] || "v0.0.0").replace('v', '');
+            const localVersion = WORM_VERSION.replace('v', '');
+            const rParts = remoteVersion.split('.').map(Number);
+            const lParts = localVersion.split('.').map(Number);
+            let isOlder = false;
+            for (let j = 0; j < 3; j++) {
+                if (lParts[j] > rParts[j]) { isOlder = true; break; }
+                if (lParts[j] < rParts[j]) break;
+            }
+            if (isOlder) ns.kill(existing.pid);
+        }
+    }
+
+    // 2. Swarm Assessment: Count active current worms and identify missing desired ones
+    const activeProcesses = ns.ps(targetHost);
+    let upToDateWormsCount = 0;
+    for (const variant of allWormVariants) {
+        if (activeProcesses.some(p => p.filename === variant)) {
+            upToDateWormsCount++;
+        }
+    }
+
+    const desiredVariants = allWormVariants.slice(0, maxWormsPossible);
+    for (const wormFile of desiredVariants) {
+        if (!activeProcesses.some(p => p.filename === wormFile)) {
+            variantsToDeploy.push(wormFile);
+        }
+    }
+
+    // Adjust variantsToDeploy if an "out-of-tier" but up-to-date worm is already filling a slot
+    const slotsAvailable = maxWormsPossible - upToDateWormsCount;
+    if (slotsAvailable <= 0) return;
+    if (variantsToDeploy.length > slotsAvailable) {
+        variantsToDeploy = variantsToDeploy.slice(0, slotsAvailable);
+    }
+
+    if (variantsToDeploy.length === 0) return;
+
+    // 3. RAM Calculation (accounting for already running up-to-date worms)
+    const requiredFreeRam = variantsToDeploy.length * WORM_COST;
+    let details = ns.dnet.getServerDetails(targetHost);
+    let freeRam = maxRam - ns.getServerUsedRam(targetHost);
+
+    // 4. Fast Path or Reallocation
+    if (freeRam >= requiredFreeRam) {
+        if (ns.scp(variantsToDeploy, targetHost, "home")) {
+            for (const wormFile of variantsToDeploy) {
+                ns.exec(wormFile, targetHost, { threads: 1, preventDuplicates: true }, WORM_VERSION);
+            }
+            logSuccess(`Swarm deployed to ${targetHost} (${upToDateWormsCount + variantsToDeploy.length}/${maxWormsPossible} variants active)`);
+        }
+    } else if (details.ramBlocked > 0) {
+        // Aggressive Reallocation Loop (Max 5 attempts / 500ms)
+        for (let attempt = 0; attempt < 5; attempt++) {
+            await ns.dnet.memoryReallocation(targetHost);
+            let freeRamCheck = ns.getServerMaxRam(targetHost) - ns.getServerUsedRam(targetHost);
+            if (freeRamCheck >= requiredFreeRam) {
+                if (ns.scp(variantsToDeploy, targetHost, "home")) {
+                    for (const wormFile of variantsToDeploy) {
+                        ns.exec(wormFile, targetHost, { threads: 1, preventDuplicates: true }, WORM_VERSION);
+                    }
+                    logSuccess(`Swarm deployed to ${targetHost} after reallocation`);
+                }
+                return;
+            }
+            await ns.sleep(100);
+        }
     }
 }
 
@@ -1589,77 +1664,4 @@ function getRankedNearbyServers(ns) {
         if (!a.isHighValue && b.isHighValue) return 1;
         return b.depth - a.depth;
     });
-}
-
-/** @param {NS} ns */
-function wormIsOlder(ns, hostname, scriptName, logDiag) {
-    const processes = ns.ps(hostname);
-    const existing = processes.find(p => p.filename === scriptName);
-
-    if (existing) {
-        // Extract version from arguments, fallback to v0.0.0
-        const remoteVersion = (existing.args[0] || "v0.0.0").replace('v', '');
-        const localVersion = WORM_VERSION.replace('v', '');
-
-        const rParts = remoteVersion.split('.').map(Number);
-        const lParts = localVersion.split('.').map(Number);
-
-        // Compare major, minor, then patch
-        for (let i = 0; i < 3; i++) {
-            if (lParts[i] > rParts[i]) return true;  // Upgrade path
-            if (lParts[i] < rParts[i]) return false; // Target is newer
-        }
-        return false; // Versions are identical
-    }
-    
-    // 🎯 THE FIX: No process found means it definitely needs a worm deployed!
-    return true; 
-}
-
-/**
- * Peeks at Port 18 to check for completed bootstrap signals.
- * If this server is the intended recipient, it clears the port and deploys.
- * @param {NS} ns 
- */
-function processBootstrapQueue(ns, currentHost, logDiag) {
-
-    // 🔍 PEEK: Inspect the top of the queue without removing the data
-    const rawData = ns.peek(18);
-
-    if (rawData === "NULL PORT DATA" || rawData === "NULL DATA" || !rawData) {
-        return; // Port is empty, nothing to do
-    }
-
-    try {
-        const packet = JSON.parse(rawData);
-
-        logDiag(`processBootstrapQueue:1631: ${currentHost} - ${packet.sender} `)
-
-        // 🎯 HEADER CHECK: Did THIS server launch this bootstrapper?
-        // if (packet.sender === currentHost) {
-
-            // It's ours! Officially pop it off the queue to clear the line
-            ns.readPort(18);
-
-            ns.tryWritePort(14, `[WORM] Session match for ${packet.target}. Executing swarm deployment...`);
-            
-
-            // Deploy the assigned worms using our active PID session and global version constant
-            if (ns.scp(packet.worms, packet.target, "home")) {
-                for (const wormFile of packet.worms) {
-                    ns.exec(wormFile, packet.target, { threads: 1, preventDuplicates: true }, WORM_VERSION);
-                }
-                ns.tryWritePort(15, `[WORM SUCCESS] Swarm deployed successfully to ${packet.target}`);
-            } else {
-                ns.tryWritePort(14, `[ERROR] Failed to scp assets to ${packet.target}`);
-            }
-        // }
-        // NOTE: If packet.sender does NOT match, we leave it exactly where it is.
-        // The rightful owner worm will see it on its next execution tick and clear it.
-
-    } catch (err) {
-        // Failsafe: If data is corrupted, clear it so it doesn't block the queue forever
-        let portCOntent = ns.readPort(18);
-        ns.tryWritePort(14, `[ERROR] Port 18 packet corruption cleared: ${err} - ${portCOntent}`);
-    }
 }

@@ -1,0 +1,20 @@
+# Dark Net Propagation Analysis - v1.6.3
+
+## 1. The Gateway Deadlock (The 23GB Barrier)
+The monolithic v1.6.3 worm variants have physically outgrown the `darkweb` node.
+*   **Math:** Integrating Stock Promotion (2GB), Phishing (2GB), and Swarm Management (~12.6GB) results in a static RAM cost of **~23.6GB**.
+*   **Gap:** Since `darkweb` is hard-capped at **16GB**, propagation from "home" into the Dark Net is completely blocked. The worm "passes" the logic check (comparing 16GB vs the 13.8GB constant) but fails to execute.
+
+## 2. The 32GB Allocation Paradox
+This is the root cause of the endless reallocation pulses on 32GB nodes.
+*   **Math Failure:** The script calculates capacity using a `WORM_COST` of **13.80**, but operates with a real weight of **~23.60**.
+*   **Trace:** On a 32GB server, logic thinks 2 worms should fit. Worm A starts (23.6GB), calculates `freeRam` as **8.4GB** (32 - 23.6), and then tries to find **13.8GB** for Worm B.
+*   **Result:** It enters an infinite reallocation loop trying to "free" 5.4GB of RAM that is actually occupied by Worm A's hidden overhead.
+
+## 3. Deployment "Self-Counting" Math Error
+*   **Logic Gap:** `manageSwarmDeployment` checks target `UsedRam`, which includes the **currently running worm**.
+*   **Consequence:** When a worm manages its own host's swarm, it counts its own size against the availability. This makes the `requiredFreeRam` check fail on nodes under 64GB, even if the "Target allocation" has been physically met.
+
+## 4. Reallocation Persistence Gap
+*   **Logic Gap:** The reallocation loop is hard-coded to **5 attempts**.
+*   **Result:** Deep-layer servers with high blockage often require dozens of pulses to clear enough continuous RAM for a ~23.6GB payload. The worm "gives up" after 0.5 seconds and moves to the next neighbor, leading to propagation stalls.
