@@ -1,0 +1,15 @@
+Port      Purpose                        Writer(s)                        Reader / Listener
+10–13     Sharded Mutex Locks            All Worms                        All Worms
+14        Diagnostics Stream             All Worms, contract-solver.js    dnet-logger.js
+15        Success/Loot Stream            All Worms, contract-solver.js    dnet-logger.js
+16        Stock Whale Targets            se.js (Market script)            All Worms (via ns.peek)
+17        Vault Synchronization          All Worms (Remote nodes)         Worm on home
+18        Bootstrap Completion           dnet-bootstrap.js                dnet-worm.js (Ecosystem wide)
+19        Labyrinth Topology Updates     dnet-worm.js (Type A)            dnet-monitor.js
+20        Labyrinth Topology Broadcast   dnet-monitor.js                  dnet-worm.js (Type A via ns.peek)
+21        File Asset Exfiltration        All Worms                        dnet-logger.js / home
+25        Labyrinth DFS Updates          dnet-worm-dfs.js (Type B)        dnet-monitor-dfs.js
+26        Labyrinth DFS Broadcast        dnet-monitor-dfs.js              dnet-worm-dfs.js (Type B via ns.peek)
+27        Labyrinth Trémaux Updates      dnet-worm-tm.js (Type C)         dnet-monitor-tm.js
+28        Labyrinth Trémaux Broadcast    dnet-monitor-tm.js               dnet-worm-tm.js (Type C via ns.peek)
+29        Labyrinth Trémaux Junctions    dnet-worm-tm.js (Type C)         dnet-worm-tm.js (Type C via ns.peek)

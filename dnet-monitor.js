@@ -9,8 +9,40 @@ export async function main(ns) {
     ns.clearPort(28);
 
     // 🔄 SWARM UPGRADE: Master dictionary holding separate topologies for each labyrinth version
-    // Structure: { "th3-l4byr1nth": { "1,11": walls }, "cru3l-l4byr1nth": { ... } }
     const globalTopologies = {};
+
+    // =================================================================
+    // 🔍 SEED LAYER: Bulk Load Historical Maps From Disk on Boot
+    // =================================================================
+    const files = ns.ls("home", "maze-");
+    let historicalDataLoaded = false;
+
+    for (const file of files) {
+        // Strict .json extension guard to completely ignore render-maze.js
+        if (!file.endsWith(".json")) continue;
+
+        try {
+            const labName = file.replace("maze-", "").replace(".json", "");
+            const fileContent = ns.read(file);
+            
+            if (fileContent && fileContent !== "{}") {
+                globalTopologies[labName] = JSON.parse(fileContent);
+                historicalDataLoaded = true;
+                ns.print(`📦 Restored [${labName}] cache: ${Object.keys(globalTopologies[labName]).length} rooms loaded.`);
+            }
+        } catch (e) {
+            ns.print(`❌ Boot-parse error on ${file}: ${e}`);
+        }
+    }
+
+    // One-time startup synchronization flash across the link if history was found
+    if (historicalDataLoaded) {
+        const outboundPorts = [20, 26, 28];
+        for (const outPort of outboundPorts) {
+            ns.clearPort(outPort);
+            ns.tryWritePort(outPort, JSON.stringify(globalTopologies));
+        }
+    }
 
     ns.tprint("🛰️ [SYSTEM] Labyrinth Multi-Maze Monitor active. Awaiting network synchronization...");
 

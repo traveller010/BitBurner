@@ -4,6 +4,9 @@ import { getNetworkNodes, canHack, canPenetrate } from "./utils.js";
 export async function main(ns) {
     ns.disableLog("ALL");
 
+    // 🎯 INTERACTIVE UX MODAL (The only requested change)
+    const enablePurchase = await ns.prompt("Enable automated server purchasing networks for this run?", { type: "boolean" });
+
     // Configuration Fields
     const autoDeployScript = "auto-deploy.js";
     const autoPurchaseServerScript = "auto-purchase-server.js";
@@ -13,17 +16,28 @@ export async function main(ns) {
     const tick = 10000; // 10-second evaluation loop
     let curTarget = "n00dles";
 
+    // Print initial monetization status to terminal
+    if (enablePurchase) {
+        ns.tprint("💰 [SYSTEM] Server purchasing networks are ACTIVE.");
+    } else {
+        ns.tprint("⚠️ [SYSTEM] Server purchasing CASH-CONSERVATION mode active. Holding money.");
+    }
+
     // Independent Background Systems to maintain from Day One
     const coreEngines = [
         "exploit-and-backdoor.js",
         "se.js",
         "dnet-logger.js",
+        "dnet-monitor.js",
+        "render-maze.js",
         "dnet-worm.js",
+        "dnet-worm-dfs.js",
+        "dnet-worm-tm.js",
         "contract-solver.js",
         // "ap-hacknet-node.js"
         "hn.js",
-
-        ];
+        "local-hack.js"
+    ];
 
     var cracks = {
         "BruteSSH.exe": ns.brutessh,
@@ -38,7 +52,7 @@ export async function main(ns) {
         for (const script of coreEngines) {
             if (ns.fileExists(script, homeServ)) {
                 if (!ns.scriptRunning(script, homeServ)) {
-                    ns.run(script, 1);
+                    ns.run(script, {preventDuplicates: true, threads: 1});
                     ns.tprint(`🚀 [SYSTEM] Initialized background module: ${script}`);
                 }
             } else {
@@ -59,8 +73,14 @@ export async function main(ns) {
         shutdownEarlyGame();
 
         // Boot advanced synchronized fleet managers
-        ns.exec(launchFleetsScript, homeServ);
-        ns.exec(apsLiteScript, homeServ);
+        ns.exec(launchFleetsScript, homeServ, {preventDuplicates: true, threads: 1});
+        
+        // Safety check controls late-game purchasing script too
+        if (enablePurchase) {
+            ns.exec(apsLiteScript, homeServ, {preventDuplicates: true, threads: 1});
+        } else {
+            ns.tprint("⚠️ [SAFETY] Blocked late-game aps-lite.js deployment to save upgrade cash.");
+        }
 
         ns.tprint("✅ [SUCCESS] Master pipeline active. Starter engine closing cleanly.");
         ns.exit();
@@ -75,7 +95,6 @@ export async function main(ns) {
         for (let node of nodes) {
             if (node === "home" || node.startsWith("pserv")) continue;
 
-            // Verify we can actually break into and hack this server right now
             if (canPenetrate(ns, node, cracks) && canHack(ns, node)) {
                 let maxMoney = ns.getServerMaxMoney(node);
                 if (maxMoney > maxCashFound) {
@@ -94,7 +113,11 @@ export async function main(ns) {
             ns.print(`WARN Swapping early game targets: ${curTarget} -> ${newTarget}`);
             shutdownEarlyGame();
             ns.exec(autoDeployScript, homeServ, 1, newTarget);
-            ns.exec(autoPurchaseServerScript, homeServ, 1, newTarget);
+            
+            // Only re-fire purchase script on target swap if allowed
+            if (enablePurchase) {
+                ns.exec(autoPurchaseServerScript, homeServ, 1, newTarget);
+            }
             curTarget = newTarget;
         }
     }
@@ -102,17 +125,23 @@ export async function main(ns) {
     // Phase 1: Boot up background operations
     initializeCoreEngines();
 
+    curTarget = getBestEarlyGameTarget();
+
     // Phase 2: Execution & Monitoring Loop
     while (true) {
         if (ns.fileExists("Formulas.exe", homeServ)) {
             launchFleetsAndExit();
         } else {
-            // Keep basic infrastructure active if it drops offline unexpectedly
+            // Keep basic hacking infrastructure active if it drops offline unexpectedly
             if (!ns.scriptRunning(autoDeployScript, homeServ) && !ns.scriptRunning(launchFleetsScript, homeServ)) {
                 ns.exec(autoDeployScript, homeServ, 1, curTarget);
             }
-            if (!ns.scriptRunning(autoPurchaseServerScript, homeServ) && !ns.scriptRunning(apsLiteScript, homeServ)) {
-                ns.exec(autoPurchaseServerScript, homeServ, 1, curTarget);
+            
+            // Safety Gate applied to active infrastructure manager loop
+            if (enablePurchase) {
+                if (!ns.scriptRunning(autoPurchaseServerScript, homeServ) && !ns.scriptRunning(apsLiteScript, homeServ)) {
+                    ns.exec(autoPurchaseServerScript, homeServ, 1, curTarget);
+                }
             }
 
             await updateTargetIfApplicable();

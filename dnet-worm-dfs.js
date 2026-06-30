@@ -1,11 +1,9 @@
-const WORM_VERSION = "v1.6.3";
+const WORM_VERSION = "v1.6.18"; // 🎯 Upgraded for network-wide propagation
 const WORM_COST = 13.80;
 const dataFilesCopied = new Set();
 const reportedUnknowns = new Set();
 const reportedStalls = new Set();
-const stasisFile = "stasis-links.txt";
 let globalPasswordVault = {};
-let stasisLinks = [];
 
 /** @param {NS} ns */
 export async function main(ns) {
@@ -23,11 +21,24 @@ export async function main(ns) {
 
     getVaultPasswords(ns, currentHost, logDiag, logSuccess);
     lootCacheFiles(ns, currentHost, logDiag, logSuccess);
-    stasisLinks = getStasisLinks(ns,currentHost, logDiag);
 
     while (true) {
         lootCacheFiles(ns, currentHost, logDiag, logSuccess);
-        establishStasisLink(ns, currentHost, logDiag, logSuccess);
+
+        // 🔄 DYNAMIC VAULT RESYNC: Forces remote nodes to continuously ingest newly discovered keys
+        if (currentHost !== "home") {
+            try {
+                if (ns.fileExists("darknet-keys.js", "home")) {
+                    if (ns.scp("darknet-keys.js", currentHost, "home")) {
+                        const fileData = ns.read("darknet-keys.js");
+                        if (fileData) {
+                            const remoteVault = JSON.parse(fileData);
+                            globalPasswordVault = Object.assign({}, remoteVault, globalPasswordVault);
+                        }
+                    }
+                }
+            } catch (e) { }
+        }
 
         if (currentHost == "home") {
             let portUpdate = ns.readPort(17);
@@ -35,7 +46,7 @@ export async function main(ns) {
             while (portUpdate !== "NULL PORT DATA" && portUpdate !== "NULL DATA" && portUpdate) {
                 try {
                     const update = JSON.parse(portUpdate);
-                    if (update.host && update.pass) {
+                    if (update.host && update.pass !== undefined) {
                         globalPasswordVault[update.host] = update.pass;
                         vaultUpdated = true;
                     }
@@ -53,41 +64,80 @@ export async function main(ns) {
             const serverDetails = ns.dnet.getServerDetails(hostname);
             if (!serverDetails.isOnline) continue;
 
+            // Establish PID session or pull from synchronized vault
             const auth = await serverSolver(ns, hostname, currentHost, logDiag, logSuccess);
-            if (!auth) {
-                continue;
-            }
-            if (auth.auth && !auth.success) {
-                const code = auth.auth.code;
-                if (code !== 351 && code !== 503) {
-                    if (!JSON.stringify(auth).includes("Unauthorized")) {
-                        logDiag(`SERVER SOLVER RESULT: ${JSON.stringify(auth)}`);
-                    }
-                }
-            }
+            if (!auth || !auth.success) continue;
 
-            if (!auth.success) continue;
-
-            if (auth.password && globalPasswordVault[hostname] !== auth.password) {
+            if (auth.password !== undefined && auth.password !== null && globalPasswordVault[hostname] !== auth.password) {
                 globalPasswordVault[hostname] = auth.password;
                 ns.tryWritePort(17, JSON.stringify({ host: hostname, pass: auth.password }));
             }
 
-            // If target needs an upgrade or is un-wormed, hand it off to the bootstrapper
-            if (wormIsOlder(ns, hostname, scriptName, logDiag)) {
-                await deployBootstrap(ns, hostname, currentHost, logDiag, scriptName);
+            // =================================================================
+            // 📡 OPTION B: BURST & TERMINATE ORCHESTRATION FRAMEWORK
+            // =================================================================
+
+            // 1. Profile Target Capacities & Requirements
+            const targetMaxRam = ns.getServerMaxRam(hostname);
+            const targetUsedRam = ns.getServerUsedRam(hostname);
+            const targetFreeRam = targetMaxRam - targetUsedRam;
+
+            const maxWormsPossible = Math.min(3, Math.floor(targetMaxRam / WORM_COST));
+            const requiredWormRam = maxWormsPossible * WORM_COST;
+
+            // If the server can't hold even a single worm variant, skip deployment entirely
+            if (maxWormsPossible === 0) continue;
+
+            // 2. Lifecycle Audit: Inspect what is currently running on the target node
+            const remoteProcesses = ns.ps(hostname);
+            const bootstrapperIsRunning = remoteProcesses.some(p => p.filename === "dnet-bootstrap.js");
+            const activeWormsCount = remoteProcesses.filter(p => ["dnet-worm.js", "dnet-worm-dfs.js", "dnet-worm-tm.js"].includes(p.filename)).length;
+
+            // 3. The Decision Tree
+            if (bootstrapperIsRunning) {
+                // Scenario A: A memory-clearing grenade is actively cooking. Leave it alone.
+                continue;
             }
 
-            if (auth && auth.success) {
-                processBootstrapQueue(ns, currentHost, logDiag);
+            if (activeWormsCount < maxWormsPossible && targetFreeRam < requiredWormRam) {
+                // Scenario B: Target lacks space for its allocation tier. Deploy a fresh burst bootstrapper.
+                const password = globalPasswordVault[hostname];
+                if (password !== undefined && password !== null) {
+                    ns.scp("dnet-bootstrap.js", hostname, "home");
+
+                    // Execute directly ON the target server using its remaining open free RAM
+                    const bootPID = ns.exec("dnet-bootstrap.js", hostname, 1, WORM_VERSION, hostname, scriptName, password);
+
+                    // 🎯 THE PID 0 FAILSAFE: Only reallocate if the bootstrapper literally could not fit
+                    if (bootPID === 0) {
+                        try {
+                            logDiag(`[RAM-CRITICAL] ${hostname} returned PID 0. Forcefully breaking system block via memory reallocation...`);
+                            await ns.dnet.memoryReallocation(hostname);
+                        } catch (e) {
+                            logDiag(`[EXPLOIT-ERR] Memory reallocation protocol failed on ${hostname}: ${e}`);
+                        }
+                    }
+                }
+                continue;
+            }
+
+            // 4. Check if actual codebase version upgrades are required on the target
+            if (wormIsOlder(ns, hostname, scriptName, logDiag)) {
+                // Scenario C: Target memory is clear and ready. Push the synchronized swarm drop.
+                let targetSwarm = ["dnet-worm.js"];
+                if (maxWormsPossible === 2) targetSwarm = ["dnet-worm.js", "dnet-worm-dfs.js"];
+                if (maxWormsPossible === 3) targetSwarm = ["dnet-worm.js", "dnet-worm-dfs.js", "dnet-worm-tm.js"];
+
+                if (ns.scp(targetSwarm, hostname, "home")) {
+                    for (const wormFile of targetSwarm) {
+                        ns.exec(wormFile, hostname, { threads: 1, preventDuplicates: true }, WORM_VERSION);
+                    }
+                }
             }
         }
 
-        // 🔄 SWARM INGESTION: Drain and deploy completed targets from Port 18
-        processBootstrapQueue(ns, currentHost);
-
         // =================================================================
-        // 🛰️ OFFICIAL IDLE UTILITY ENGINE
+        // 🛰️ OFFICIAL IDLE UTILITY ENGINE (100% Intact & Guarded)
         // =================================================================
         if (currentHost !== "home" && currentHost !== "darkweb") {
             // 1. Stock Manipulation Module (Reads target ticker from Port 16 via ns.peek)
@@ -107,6 +157,7 @@ export async function main(ns) {
                 logDiag(`Phishing attack error: ${e}`)
             }
         }
+
         await ns.sleep(100);
     }
 }
@@ -114,91 +165,66 @@ export async function main(ns) {
 /** @param {NS} ns */
 // ADD currentHost to the arguments list!
 async function serverSolver(ns, hostname, currentHost, logDiag, logSuccess) {
-    // if (localCooldowns.has(hostname) && Date.now() < localCooldowns.get(hostname)) return false;
-
     const details = ns.dnet.getServerDetails(hostname);
     if (!details.isConnectedToCurrentServer || !details.isOnline) return false;
 
-    if (details.hasSession && details.modelId !== "(The Labyrinth)") {
-        return { success: true, alreadyActive: true };
-    }
-
-    // --- REFINED HEARTBLEED DISCOVERY ---
+    // Telemetry log scraping
     const hb = await ns.dnet.heartbleed(hostname, { peek: true });
     if (hb && hb.logs) {
         for (const logEntry of hb.logs) {
             try {
-                // Safely attempt to parse; if it fails, it's just a text log, not JSON
                 const entry = (typeof logEntry === 'string') ? JSON.parse(logEntry) : logEntry;
-
-                if (entry.code === 200 && entry.passwordAttempted) {
+                if (entry.code === 200 && entry.passwordAttempted !== undefined) {
                     const discoveredPass = entry.passwordAttempted;
                     if (globalPasswordVault[hostname] !== discoveredPass) {
                         globalPasswordVault[hostname] = discoveredPass;
                         ns.tryWritePort(17, JSON.stringify({ host: hostname, pass: discoveredPass }));
-                        logSuccess(`Discovered ${hostname} password via Heartbleed: ${discoveredPass}`);
                     }
                 }
-            } catch (e) {
-                // Silent catch: logEntry was just text, not JSON, so we ignore it
-                continue;
-            }
+            } catch (e) { continue; }
         }
     }
 
-    // Try vault
-    if (globalPasswordVault[hostname]) {
+    // Attempt connection if credential exists
+    if (globalPasswordVault[hostname] !== undefined) {
+        const attemptKey = globalPasswordVault[hostname];
         try {
-            ns.dnet.connectToSession(hostname, globalPasswordVault[hostname]);
-            if (ns.dnet.getServerDetails(hostname).hasSession) {
-                return { success: true, password: globalPasswordVault[hostname], alreadyActive: true };
+            ns.dnet.connectToSession(hostname, attemptKey);
+            const postConnectDetails = ns.dnet.getServerDetails(hostname);
+
+            if (postConnectDetails.hasSession) {
+                return { success: true, password: attemptKey, alreadyActive: true };
             } else {
                 delete globalPasswordVault[hostname];
             }
-        } catch (e) { delete globalPasswordVault[hostname]; }
+        } catch (e) {
+            logDiag(`[TRACK-SOLVER] ERROR: Session connection crash for ${hostname}: ${e}`);
+            delete globalPasswordVault[hostname];
+        }
     }
 
-    if (!acquireLock(ns, hostname, details.modelId)) return false;
+    const lockAcquired = acquireLock(ns, hostname, details.modelId);
+    if (!lockAcquired) return false;
 
     try {
         const result = await crackingMatrix(ns, hostname, currentHost, details, logDiag, logSuccess);
 
+        if (result && result.success) {
+            return result;
+        }
+
         if (!result || !result.success) {
-            // 1. Immediately poll the live network status after matrix processing ends
             const freshHb = await ns.dnet.heartbleed(hostname, { peek: true });
-            const networkCode = freshHb?.code;
-
-            // 2. Network State Latch: If the server dropped or migrated, override the code
-            if (networkCode === 351 || networkCode === 503) {
-                if (result && result.auth) {
-                    result.auth.code = networkCode;
-                    result.auth.message = freshHb.message;
-                } else if (result) {
-                    result.auth = { code: networkCode, message: freshHb.message };
-                }
-            }
-
             const targetAuth = result?.auth || result;
-            const code = targetAuth?.code;
+            const code = targetAuth?.code || freshHb?.code;
 
-            // 3. Evaluate the unified code threshold
             if (code !== 351 && code !== 503) {
-                let stallKey = `${hostname}-${details.modelId}`;
-                if (!reportedStalls.has(stallKey)) {
-                    logDiag(`STALL: ${hostname} (${details.modelId}) Hint: ${details.passwordHint}`);
-
-                    let hbString = JSON.stringify(freshHb);
-                    if (!hbString.includes("Server restarting") && !JSON.stringify(targetAuth).includes("Unauthorized")) {
-                        logDiag(`STALL DETAILS: ${hbString}`);
-                        logDiag(`STALL AUTH DETAILS: ${JSON.stringify(targetAuth)}`);
-                    }
-                    reportedStalls.add(stallKey);
-                }
+                logDiag(`[TRACK-SOLVER] STALL ENCOUNTERED on ${hostname} (Code: ${code}) | HB Payload: ${JSON.stringify(freshHb)}`);
             }
         }
         return result;
     } catch (e) {
-        logDiag(`CRASH in matrix for ${hostname}: ${e}`);
+        logDiag(`[TRACK-SOLVER] CRITICAL matrix crash for ${hostname}: ${e}`);
         return false;
     } finally {
         releaseLock(ns, hostname);
@@ -1273,7 +1299,9 @@ async function solveLabyrinth(ns, hostname, logDiag, logSuccess) {
             if (globalDataRaw && globalDataRaw !== "NULL PORT DATA" && globalDataRaw !== "NULL DATA") {
                 try {
                     let globalTopology = JSON.parse(globalDataRaw);
-                    Object.assign(state.grid, globalTopology);
+                    if (globalTopology[hostname]) {
+                        Object.assign(state.grid, globalTopology[hostname]);
+                    }
                 }
                 catch (e) {
                     logDiag(`Error getting topology: ${e}`)
@@ -1358,7 +1386,7 @@ async function solveLabyrinth(ns, hostname, logDiag, logSuccess) {
 /** @param {NS} ns */
 function acquireLock(ns, hostname, model) {
     // Do not lock labyrinth
-    // if (model == "(The Labyrinth)") return true;
+    if (model == "(The Labyrinth)") return true;
     let hash = 0;
     for (let i = 0; i < hostname.length; i++) hash = hostname.charCodeAt(i) + ((hash << 5) - hash);
     const port = 10 + Math.abs(hash % 4);
@@ -1427,83 +1455,8 @@ function getVaultPasswords(ns, currentHost, logDiag, logSuccess) {
                     }
                 }
             }
-        } catch (e) { logDiag(`Vault sync failed: ${e}`); }
-    }
-}
-
-/** @param {NS} ns */
-function getStasisLinks(ns, currentHost, logDiag) {
-    let stasisFileText = "";
-    if (currentHost == "home") {
-        if (ns.fileExists(stasisFile, "home")) {
-            try {
-                stasisFileText = ns.read(stasisFile);
-            }
-            catch (e) {
-                logDiag(`Cannot read stasisLink file: ${stasisFile}`);
-            }
-        }
-    }
-    else {
-        if (ns.fileExists(stasisFile, "home")) {
-            if (ns.scp(stasisFile, currentHost, "home")) {
-                try {
-                    stasisFileText = ns.read(stasisFile);
-                }
-                catch (e) {
-                    logDiag(`Cannot read stasisLink file: ${stasisFile}`);
-                }
-            }
-            else {
-                logDiag(`Cannot copy stasisLink file from home`)
-            }
-        }
-    }
-    if (stasisFileText) {
-        return stasisFileText.split(",")
-            .map(item => item.trim())       // Remove spaces around numbers
-            .filter(item => item !== "")    // Drop the trailing empty element
-            .map(Number);                   // Convert strings ("1") to numbers (1)
-    }
-    else {
-        return [];
-    }
-}
-
-/** @param {NS} ns */
-function setStasisLinks(ns, currentHost, logDiag) {
-    if (currentHost != "home") {
-        try {
-            ns.write(stasisFile, stasisLinks, "w");
-            ns.scp(stasisFile, "home", currentHost);
-        }
-        catch (e) {
-            logDiag(`Error writing stasisLink file to home ${e}`)
-        }
-    }
-}
-
-/** @param {NS} ns */
-function establishStasisLink(ns, currentHost, logDiag, logSuccess) {
-    if (currentHost != "home" && currentHost != "darkweb") {
-        let currentServerDetails = ns.dnet.getServerDetails(currentHost);
-        // If current server depth is 9, 17 or 23 and there is no link already at that depth
-        if ([8, 16, 22].includes(currentServerDetails.depth) && !stasisLinks.includes(currentServerDetails.depth)) {
-            if (stasisLinks.length < ns.dnet.getStasisLinkLimit()) {
-                // create a stasis link on this server
-                const freeRam = ns.getServerMaxRam(currentHost) - ns.getServerUsedRam(currentHost);
-                // Only compile and execute the worker if the node can support the 12GB runtime cost
-                if (freeRam >= 12) {
-                    ns.write("stasis-worker.js", '/** @param {NS} ns */ export async function main(ns) { ns.dnet.setStasisLink(); }', "w");
-                    ns.exec("stasis-worker.js", currentHost);
-                    stasisLinks.push(currentServerDetails.depth);
-                    setStasisLinks(ns, currentHost, logDiag);
-                    logSuccess(`Dynamically deployed stasis worker on ${currentHost} - depth: ${currentServerDetails.depth}`);
-                    // ns.tprint(`Dynamically deployed stasis worker on ${currentHost} - depth: ${currentServerDetails.depth}`)
-                } else {
-                    // logDiag(`Insufficient RAM on ${currentHost} to execute background stasis anchor.`);
-                }
-            }
+        } catch (e) {
+            logDiag(`Vault sync failed: ${e}`);
         }
     }
 }
@@ -1566,16 +1519,6 @@ function lootCacheFiles(ns, currentHost, logDiag, logSuccess) {
 }
 
 /** @param {NS} ns */
-async function deployBootstrap(ns, hostname, currentHost, logDiag, scriptName) {
-    try {
-        // Run the resource allocation monitor locally to manage the remote target safely
-        ns.exec("dnet-bootstrap.js", currentHost, { threads: 1, preventDuplicates: true }, WORM_VERSION, hostname, scriptName);
-    } catch (e) {
-        logDiag(`Failed to launch bootstrapper on ${currentHost} for ${hostname}: ${e}`);
-    }
-}
-
-/** @param {NS} ns */
 function getRankedNearbyServers(ns) {
     const nearbyServers = ns.dnet.probe();
     return nearbyServers.map(h => {
@@ -1594,72 +1537,32 @@ function getRankedNearbyServers(ns) {
 /** @param {NS} ns */
 function wormIsOlder(ns, hostname, scriptName, logDiag) {
     const processes = ns.ps(hostname);
-    const existing = processes.find(p => p.filename === scriptName);
+    const allWormVariants = ["dnet-worm.js", "dnet-worm-dfs.js", "dnet-worm-tm.js"];
+    const activeWorms = processes.filter(p => allWormVariants.includes(p.filename));
 
-    if (existing) {
-        // Extract version from arguments, fallback to v0.0.0
-        const remoteVersion = (existing.args[0] || "v0.0.0").replace('v', '');
-        const localVersion = WORM_VERSION.replace('v', '');
+    const maxRam = ns.getServerMaxRam(hostname);
+    const maxWormsPossible = Math.min(3, Math.floor(maxRam / 13.80));
 
+    if (activeWorms.length === 0 && maxWormsPossible > 0) {
+        return true;
+    }
+
+    if (activeWorms.length < maxWormsPossible) {
+        return true;
+    }
+
+    const localVersion = WORM_VERSION.replace('v', '');
+    const lParts = localVersion.split('.').map(Number);
+
+    for (const worm of activeWorms) {
+        const remoteVersion = (worm.args[0] || "v0.0.0").replace('v', '');
         const rParts = remoteVersion.split('.').map(Number);
-        const lParts = localVersion.split('.').map(Number);
 
-        // Compare major, minor, then patch
         for (let i = 0; i < 3; i++) {
-            if (lParts[i] > rParts[i]) return true;  // Upgrade path
-            if (lParts[i] < rParts[i]) return false; // Target is newer
+            if (lParts[i] > rParts[i]) return true;
+            if (lParts[i] < rParts[i]) break;
         }
-        return false; // Versions are identical
     }
-    
-    // 🎯 THE FIX: No process found means it definitely needs a worm deployed!
-    return true; 
+    return false;
 }
 
-/**
- * Peeks at Port 18 to check for completed bootstrap signals.
- * If this server is the intended recipient, it clears the port and deploys.
- * @param {NS} ns 
- */
-function processBootstrapQueue(ns, currentHost, logDiag) {
-
-    // 🔍 PEEK: Inspect the top of the queue without removing the data
-    const rawData = ns.peek(18);
-
-    if (rawData === "NULL PORT DATA" || rawData === "NULL DATA" || !rawData) {
-        return; // Port is empty, nothing to do
-    }
-
-    try {
-        const packet = JSON.parse(rawData);
-
-        logDiag(`processBootstrapQueue:1631: ${currentHost} - ${packet.sender} `)
-
-        // 🎯 HEADER CHECK: Did THIS server launch this bootstrapper?
-        // if (packet.sender === currentHost) {
-
-            // It's ours! Officially pop it off the queue to clear the line
-            ns.readPort(18);
-
-            ns.tryWritePort(14, `[WORM] Session match for ${packet.target}. Executing swarm deployment...`);
-            
-
-            // Deploy the assigned worms using our active PID session and global version constant
-            if (ns.scp(packet.worms, packet.target, "home")) {
-                for (const wormFile of packet.worms) {
-                    ns.exec(wormFile, packet.target, { threads: 1, preventDuplicates: true }, WORM_VERSION);
-                }
-                ns.tryWritePort(15, `[WORM SUCCESS] Swarm deployed successfully to ${packet.target}`);
-            } else {
-                ns.tryWritePort(14, `[ERROR] Failed to scp assets to ${packet.target}`);
-            }
-        // }
-        // NOTE: If packet.sender does NOT match, we leave it exactly where it is.
-        // The rightful owner worm will see it on its next execution tick and clear it.
-
-    } catch (err) {
-        // Failsafe: If data is corrupted, clear it so it doesn't block the queue forever
-        let portCOntent = ns.readPort(18);
-        ns.tryWritePort(14, `[ERROR] Port 18 packet corruption cleared: ${err} - ${portCOntent}`);
-    }
-}

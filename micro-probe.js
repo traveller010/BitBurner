@@ -1,0 +1,1 @@
+export async function main(ns) { ns.write("local-probe.txt", JSON.stringify(ns.dnet.probe()), "w"); }
